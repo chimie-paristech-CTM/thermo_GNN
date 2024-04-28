@@ -1,16 +1,17 @@
 from collections import OrderedDict, defaultdict
-import sys
 import csv
 import ctypes
 from logging import Logger
 import pickle
 from random import Random
+from collections import defaultdict
+import numpy as np
 from typing import List, Set, Tuple, Union
 import os
 import json
+from torch.utils.data import ConcatDataset
 
 from rdkit import Chem
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -23,6 +24,7 @@ from chemprop.rdkit import make_mol
 # Increase maximum size of field in the csv processing for the current architecture
 csv.field_size_limit(int(ctypes.c_ulong(-1).value // 2))
 
+
 def get_header(path: str) -> List[str]:
     """
     Returns the header of a data CSV file.
@@ -33,6 +35,15 @@ def get_header(path: str) -> List[str]:
         header = next(csv.reader(f))
 
     return header
+
+
+def extract_filename_without_extension(file_path):
+    if os.path.exists(file_path):
+        file_name = os.path.basename(file_path)
+        file_name_without_extension = os.path.splitext(file_name)[0]
+        return file_name_without_extension
+    else:
+        return ValueError("csv File does not")
 
 
 def preprocess_smiles_columns(path: str,
@@ -53,8 +64,16 @@ def preprocess_smiles_columns(path: str,
         if os.path.isfile(path):
             columns = get_header(path)
             smiles_columns = columns[:number_of_molecules]
+        elif any(os.path.isdir(pathfolder) for pathfolder in path):
+            for pathfolder in path:
+                if os.path.isdir(pathfolder):  # if is a folder
+                    folder_contents = os.listdir(pathfolder)
+                    for file in folder_contents:
+                        if file.endswith('.csv'):  # if is a csv file
+                            columns = get_header(file)
+                            smiles_columns = columns[:number_of_molecules]
         else:
-            smiles_columns = [None]*number_of_molecules
+            smiles_columns = [None] * number_of_molecules
     else:
         if isinstance(smiles_columns, str):
             smiles_columns = [smiles_columns]
@@ -68,13 +87,10 @@ def preprocess_smiles_columns(path: str,
     return smiles_columns
 
 
-def get_task_names(
-    path: str,
-    smiles_columns: Union[str, List[str]] = None,
-    target_columns: List[str] = None,
-    ignore_columns: List[str] = None,
-    loss_function: str = None,
-) -> List[str]:
+def get_task_names(path: str,
+                   smiles_columns: Union[str, List[str]] = None,
+                   target_columns: List[str] = None,
+                   ignore_columns: List[str] = None) -> List[str]:
     """
     Gets the task names from a data CSV file.
     If :code:`target_columns` is provided, returns `target_columns`.
@@ -89,22 +105,42 @@ def get_task_names(
     :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
     :return: A list of task names.
     """
-    if target_columns is not None:
-        return target_columns
+    if os.path.isfile(path):
+        # print(f"{path} is a file.")
+        if target_columns is not None:
+            return target_columns
 
-    columns = get_header(path)
+        columns = get_header(path)
 
-    if isinstance(smiles_columns, str) or smiles_columns is None:
-        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
+        if isinstance(smiles_columns, str) or smiles_columns is None:
+            smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
 
-    ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
+        ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
 
-    target_names = [column for column in columns if column not in ignore_columns]
+        target_names = [column for column in columns if column not in ignore_columns]
 
-    if loss_function == "quantile_interval":
-        target_names = target_names * 2
+        return target_names
+    elif os.path.isdir(path):
 
-    return target_names
+        if target_columns is not None:
+            return target_columns
+        target_names = []
+        for pathfolder in os.listdir(path):
+            if os.path.isdir(os.path.join(path, pathfolder)):
+                for filename in os.listdir(os.path.join(path, pathfolder)):
+                    if filename.endswith('.csv'):  # Assuming all files in the folder are CSV files
+                        file_path = os.path.join(os.path.join(path, pathfolder), filename)
+                        columns = get_header(file_path)
+                        if isinstance(smiles_columns, str) or smiles_columns is None:
+                            smiles_columns = preprocess_smiles_columns(path=file_path, smiles_columns=smiles_columns)
+
+                        ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
+
+                        target_names.extend([column for column in columns if column not in ignore_columns])
+
+                return target_names
+    else:
+        raise ValueError(f"the path is not file and directory.")
 
 
 def get_mixed_task_names(path: str,
@@ -141,7 +177,7 @@ def get_mixed_task_names(path: str,
     ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
 
     if target_columns is not None:
-        target_names =  target_columns
+        target_names = target_columns
     else:
         target_names = [column for column in columns if column not in ignore_columns]
 
@@ -150,17 +186,7 @@ def get_mixed_task_names(path: str,
         for row in reader:
             atom_target_names, bond_target_names, molecule_target_names = [], [], []
             smiles = [row[c] for c in smiles_columns]
-            for s in smiles:
-                if keep_atom_map:
-                    # When the original atom mapping is used, the explicit hydrogens specified in the input SMILES should be used
-                    # However, the explicit Hs can only be added for reactions with `--explicit_h` flag
-                    # To fix this, `keep_h` is set to True when `keep_atom_map` is also True
-                    mol = make_mol(s, keep_h=True, add_h=add_h, keep_atom_map=True)
-                else:
-                    mol = make_mol(s, keep_h=keep_h, add_h=add_h, keep_atom_map=False)
-                if len(mol.GetAtoms()) != len(mol.GetBonds()):
-                    break
-
+            mol = make_mol(smiles[0], keep_h, add_h, keep_atom_map)
             for column in target_names:
                 value = row[column]
                 value = value.replace('None', 'null')
@@ -170,19 +196,17 @@ def get_mixed_task_names(path: str,
                 if len(target.shape) == 0:
                     is_molecule_target = True
                 elif len(target.shape) == 1:
-                    if len(target) == len(mol.GetAtoms()):  # Atom targets saved as 1D list
+                    if len(mol.GetAtoms()) == len(mol.GetBonds()):
+                        break
+                    elif len(target) == len(mol.GetAtoms()):  # Atom targets saved as 1D list
                         is_atom_target = True
                     elif len(target) == len(mol.GetBonds()):  # Bond targets saved as 1D list
                         is_bond_target = True
-                    else:
-                        raise RuntimeError(f'Unrecognized targets of column {column} in {path}. '
-                                           'Expected targets should be either atomic or bond targets. '
-                                           'Please ensure the content is correct.')
                 elif len(target.shape) == 2:  # Bond targets saved as 2D list
                     is_bond_target = True
                 else:
-                    raise ValueError(f'Unrecognized targets of column {column} in {path}.')
-                
+                    raise ValueError('Unrecognized targets of column {column} in {path}.')
+
                 if is_atom_target:
                     atom_target_names.append(column)
                 elif is_bond_target:
@@ -248,7 +272,7 @@ def get_constraints(path: str,
         raw_constraints_data = np.transpose(raw_constraints_data)  # each is num_data x num_columns
     else:
         raw_constraints_data = None
-    
+
     return constraints_data, raw_constraints_data
 
 
@@ -274,7 +298,8 @@ def get_smiles(path: str,
         raise ValueError('If smiles_column is provided, the CSV file must have a header.')
 
     if (isinstance(smiles_columns, str) or smiles_columns is None) and header:
-        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns, number_of_molecules=number_of_molecules)
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns,
+                                                   number_of_molecules=number_of_molecules)
 
     with open(path) as f:
         if header:
@@ -301,7 +326,8 @@ def filter_invalid_smiles(data: MoleculeDataset) -> MoleculeDataset:
     return MoleculeDataset([datapoint for datapoint in tqdm(data)
                             if all(s != '' for s in datapoint.smiles) and all(m is not None for m in datapoint.mol)
                             and all(m.GetNumHeavyAtoms() > 0 for m in datapoint.mol if not isinstance(m, tuple))
-                            and all(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() > 0 for m in datapoint.mol if isinstance(m, tuple))])
+                            and all(
+            m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() > 0 for m in datapoint.mol if isinstance(m, tuple))])
 
 
 def get_invalid_smiles_from_file(path: str = None,
@@ -349,10 +375,9 @@ def get_invalid_smiles_from_list(smiles: List[List[str]], reaction: bool = False
         mols = make_mols(smiles=mol_smiles, reaction_list=is_reaction_list, keep_h_list=is_explicit_h_list,
                          add_h_list=is_adding_hs_list, keep_atom_map_list=keep_atom_map_list)
         if any(s == '' for s in mol_smiles) or \
-           any(m is None for m in mols) or \
-           any(m.GetNumHeavyAtoms() == 0 for m in mols if not isinstance(m, tuple)) or \
-           any(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() == 0 for m in mols if isinstance(m, tuple)):
-
+                any(m is None for m in mols) or \
+                any(m.GetNumHeavyAtoms() == 0 for m in mols if not isinstance(m, tuple)) or \
+                any(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() == 0 for m in mols if isinstance(m, tuple)):
             invalid_smiles.append(mol_smiles)
 
     return invalid_smiles
@@ -473,7 +498,6 @@ def get_data(path: str,
             smiles_columns=smiles_columns,
             target_columns=target_columns,
             ignore_columns=ignore_columns,
-            loss_function=loss_function,
         )
 
     # Find targets provided as inequalities
@@ -485,15 +509,19 @@ def get_data(path: str,
     # Load data
     with open(path) as f:
         reader = csv.DictReader(f)
+        print(reader)
         fieldnames = reader.fieldnames
         if any([c not in fieldnames for c in smiles_columns]):
-            raise ValueError(f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
+            raise ValueError(
+                f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
         if any([c not in fieldnames for c in target_columns]):
-            raise ValueError(f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
+            raise ValueError(
+                f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
 
-        all_smiles, all_targets, all_atom_targets, all_bond_targets, all_rows, all_features, all_phase_features, all_constraints_data, all_raw_constraints_data, all_weights, all_gt, all_lt = [], [], [], [], [], [], [], [], [], [], [], []
+        all_smiles_label, all_smiles, all_targets, all_atom_targets, all_bond_targets, all_rows, all_features, all_phase_features, all_constraints_data, all_raw_constraints_data, all_weights, all_gt, all_lt = [], [], [], [], [], [], [], [], [], [], [], [], []
         for i, row in enumerate(tqdm(reader)):
             smiles = [row[c] for c in smiles_columns]
+            all_smiles_label.append(extract_filename_without_extension(path))
 
             targets, atom_targets, bond_targets = [], [], []
             for column in target_columns:
@@ -504,7 +532,8 @@ def get_data(path: str,
                     if loss_function == 'bounded_mse':
                         targets.append(float(value.strip('<>')))
                     else:
-                        raise ValueError('Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
+                        raise ValueError(
+                            'Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
                 elif '[' in value or ']' in value:
                     value = value.replace('None', 'null')
                     target = np.array(json.loads(value))
@@ -518,18 +547,20 @@ def get_data(path: str,
                         bond_target_arranged = []
                         mol = make_mol(smiles[0], args.explicit_h, args.adding_h, args.keeping_atom_map)
                         for bond in mol.GetBonds():
-                            bond_target_arranged.append(target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
+                            bond_target_arranged.append(
+                                target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
                         bond_targets.append(np.array(bond_target_arranged))
                         targets.append(np.array(bond_target_arranged))
                     else:
                         raise ValueError(f'Unrecognized targets of column {column} in {path}.')
+                elif column[1] == "dataset_columns":
+                    targets.append(float(value[0]))
                 else:
                     targets.append(float(value))
 
             # Check whether all targets are None and skip if so
             if skip_none_targets and all(x is None for x in targets):
                 continue
-
             all_smiles.append(smiles)
             all_targets.append(targets)
             all_atom_targets.append(atom_targets)
@@ -592,6 +623,8 @@ def get_data(path: str,
             MoleculeDatapoint(
                 smiles=smiles,
                 targets=targets,
+                smiles_label=smiles_label,
+                input_features_type=args.input_features_type,
                 atom_targets=all_atom_targets[i] if atom_targets else None,
                 bond_targets=all_bond_targets[i] if bond_targets else None,
                 row=all_rows[i] if store_row else None,
@@ -609,8 +642,8 @@ def get_data(path: str,
                 raw_constraints=all_raw_constraints_data[i] if raw_constraints_data is not None else None,
                 overwrite_default_atom_features=args.overwrite_default_atom_features if args is not None else False,
                 overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False
-            ) for i, (smiles, targets) in tqdm(enumerate(zip(all_smiles, all_targets)),
-                                            total=len(all_smiles))
+            ) for i, (smiles, targets, smiles_label) in tqdm(enumerate(zip(all_smiles, all_targets, all_smiles_label)),
+                                                             total=len(all_smiles))
         ])
 
     # Filter out invalid SMILES
@@ -622,6 +655,1182 @@ def get_data(path: str,
             debug(f'Warning: {original_data_len - len(data)} SMILES are invalid.')
 
     return data
+
+
+def get_data_multisingle(path: str,
+                         smiles_columns: Union[str, List[str]] = None,
+                         target_columns: List[str] = None,
+                         ignore_columns: List[str] = None,
+                         skip_invalid_smiles: bool = True,
+                         args: Union[TrainArgs, PredictArgs] = None,
+                         data_weights_path: str = None,
+                         features_path: List[str] = None,
+                         features_generator: List[str] = None,
+                         phase_features_path: str = None,
+                         atom_descriptors_path: str = None,
+                         bond_descriptors_path: str = None,
+                         constraints_path: str = None,
+                         max_data_size: int = None,
+                         store_row: bool = False,
+                         logger: Logger = None,
+                         loss_function: str = None,
+                         skip_none_targets: bool = False) -> MoleculeDataset:
+    """
+    Gets SMILES and target values from a CSV file.
+
+    :param path: Path to a CSV file.
+    :param smiles_columns: The names of the columns containing SMILES.
+                           By default, uses the first :code:`number_of_molecules` columns.
+    :param target_columns: Name of the columns containing target values. By default, uses all columns
+                           except the :code:`smiles_column` and the :code:`ignore_columns`.
+    :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+    :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+    :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+    :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+    :param features_path: A list of paths to files containing features. If provided, it is used
+                          in place of :code:`args.features_path`.
+    :param features_generator: A list of features generators to use. If provided, it is used
+                               in place of :code:`args.features_generator`.
+    :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+    :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+    :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+    :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+    :param max_data_size: The maximum number of data points to load.
+    :param logger: A logger for recording output.
+    :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+    :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+                              are passed in, so only a subset of tasks are examined.
+    :param loss_function: The loss function to be used in training.
+    :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+             with other info such as additional features when desired.
+    """
+    debug = logger.debug if logger is not None else print
+
+    if args is not None:
+        # Prefer explicit function arguments but default to args if not provided
+        smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+        target_columns = target_columns if target_columns is not None else args.target_columns
+        ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+        features_path = features_path if features_path is not None else args.features_path
+        features_generator = features_generator if features_generator is not None else args.features_generator
+        phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+        atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+            else args.atom_descriptors_path
+        bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+            else args.bond_descriptors_path
+        constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+        max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+        loss_function = loss_function if loss_function is not None else args.loss_function
+
+    if isinstance(smiles_columns, str) or smiles_columns is None:
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns)
+
+    max_data_size = max_data_size or float('inf')
+
+    # Load features
+    if features_path is not None:
+        features_data = []
+        for feat_path in features_path:
+            features_data.append(load_features(feat_path))  # each is num_data x num_features
+        features_data = np.concatenate(features_data, axis=1)
+    else:
+        features_data = None
+
+    if phase_features_path is not None:
+        phase_features = load_features(phase_features_path)
+        for d_phase in phase_features:
+            if not (d_phase.sum() == 1 and np.count_nonzero(d_phase) == 1):
+                raise ValueError('Phase features must be one-hot encoded.')
+        if features_data is not None:
+            features_data = np.concatenate((features_data, phase_features), axis=1)
+        else:  # if there are no other molecular features, phase features become the only molecular features
+            features_data = np.array(phase_features)
+    else:
+        phase_features = None
+
+    # Load constraints
+    if constraints_path is not None:
+        constraints_data, raw_constraints_data = get_constraints(
+            path=constraints_path,
+            target_columns=args.target_columns,
+            save_raw_data=args.save_smiles_splits
+        )
+    else:
+        constraints_data = None
+        raw_constraints_data = None
+
+    # Load data weights
+    if data_weights_path is not None:
+        data_weights = get_data_weights(data_weights_path)
+    else:
+        data_weights = None
+
+    # By default, the targets columns are all the columns except the SMILES column
+    if target_columns is None:
+        target_columns = get_task_names(
+            path=path,
+            smiles_columns=smiles_columns,
+            target_columns=target_columns,
+            ignore_columns=ignore_columns,
+        )
+
+    # Find targets provided as inequalities
+    if loss_function == 'bounded_mse':
+        gt_targets, lt_targets = get_inequality_targets(path=path, target_columns=target_columns)
+    else:
+        gt_targets, lt_targets = None, None
+
+    # Load data
+    with open(path) as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        if any([c not in fieldnames for c in smiles_columns]):
+            raise ValueError(
+                f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
+        if any([c not in fieldnames for c in target_columns]):
+            raise ValueError(
+                f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
+
+        all_smiles_label, all_smiles, all_targets, all_atom_targets, all_bond_targets, all_rows, all_features, all_phase_features, all_constraints_data, all_raw_constraints_data, all_weights, all_gt, all_lt, all_targets_label = [], [], [], [], [], [], [], [], [], [], [], [], [], []
+        for i, row in enumerate(tqdm(reader)):
+            smiles = [row[c] for c in smiles_columns]
+
+            all_smiles_label.append(extract_filename_without_extension(path))
+
+            targets, targets_label, atom_targets, bond_targets = [], [], [], []
+            targets_label_columns = args.ignore_columns[0]
+
+            for column in target_columns:
+                value = row[column]
+                label = row[targets_label_columns]
+                if value in ['', 'nan']:
+                    targets.append(None)
+                elif '>' in value or '<' in value:
+                    if loss_function == 'bounded_mse':
+                        targets.append(float(value.strip('<>')))
+                    else:
+                        raise ValueError(
+                            'Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
+                elif '[' in value or ']' in value:
+                    value = value.replace('None', 'null')
+                    target = np.array(json.loads(value))
+                    if len(target.shape) == 1 and column in args.atom_targets:  # Atom targets saved as 1D list
+                        atom_targets.append(target)
+                        targets.append(target)
+                    elif len(target.shape) == 1 and column in args.bond_targets:  # Bond targets saved as 1D list
+                        bond_targets.append(target)
+                        targets.append(target)
+                    elif len(target.shape) == 2:  # Bond targets saved as 2D list
+                        bond_target_arranged = []
+                        mol = make_mol(smiles[0], args.explicit_h, args.adding_h, args.keeping_atom_map)
+                        for bond in mol.GetBonds():
+                            bond_target_arranged.append(
+                                target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
+                        bond_targets.append(np.array(bond_target_arranged))
+                        targets.append(np.array(bond_target_arranged))
+                    else:
+                        raise ValueError(f'Unrecognized targets of column {column} in {path}.')
+                elif column[1] == "dataset_columns":
+                    targets.append(float(value[0]))
+                else:
+                    targets_label.append(str(label))
+                    targets.append(float(value))
+
+            # Check whether all targets are None and skip if so
+            if skip_none_targets and all(x is None for x in targets):
+                continue
+            all_smiles.append(smiles)
+            all_targets.append(targets)
+            all_targets_label.append(targets_label)
+            all_atom_targets.append(atom_targets)
+            all_bond_targets.append(bond_targets)
+
+            if features_data is not None:
+                all_features.append(features_data[i])
+
+            if phase_features is not None:
+                all_phase_features.append(phase_features[i])
+
+            if constraints_data is not None:
+                all_constraints_data.append(constraints_data[i])
+
+            if raw_constraints_data is not None:
+                all_raw_constraints_data.append(raw_constraints_data[i])
+
+            if data_weights is not None:
+                all_weights.append(data_weights[i])
+
+            if gt_targets is not None:
+                all_gt.append(gt_targets[i])
+
+            if lt_targets is not None:
+                all_lt.append(lt_targets[i])
+
+            if store_row:
+                all_rows.append(row)
+
+            if len(all_smiles) >= max_data_size:
+                break
+
+        atom_features = None
+        atom_descriptors = None
+        if args is not None and args.atom_descriptors is not None:
+            try:
+                descriptors = load_valid_atom_or_bond_features(atom_descriptors_path, [x[0] for x in all_smiles])
+            except Exception as e:
+                raise ValueError(f'Failed to load or validate custom atomic descriptors or features: {e}')
+
+            if args.atom_descriptors == 'feature':
+                atom_features = descriptors
+            elif args.atom_descriptors == 'descriptor':
+                atom_descriptors = descriptors
+
+        bond_features = None
+        bond_descriptors = None
+        if args is not None and args.bond_descriptors is not None:
+            try:
+                descriptors = load_valid_atom_or_bond_features(bond_descriptors_path, [x[0] for x in all_smiles])
+            except Exception as e:
+                raise ValueError(f'Failed to load or validate custom bond descriptors or features: {e}')
+
+            if args.bond_descriptors == 'feature':
+                bond_features = descriptors
+            elif args.bond_descriptors == 'descriptor':
+                bond_descriptors = descriptors
+
+        data = MoleculeDataset([
+            MoleculeDatapoint(
+                smiles=smiles,
+                targets=targets,
+                smiles_label=smiles_label,
+                targets_label=targets_label,
+                input_features_type=args.input_features_type,
+                atom_targets=all_atom_targets[i] if atom_targets else None,
+                bond_targets=all_bond_targets[i] if bond_targets else None,
+                row=all_rows[i] if store_row else None,
+                data_weight=all_weights[i] if data_weights is not None else None,
+                gt_targets=all_gt[i] if gt_targets is not None else None,
+                lt_targets=all_lt[i] if lt_targets is not None else None,
+                features_generator=features_generator,
+                features=all_features[i] if features_data is not None else None,
+                phase_features=all_phase_features[i] if phase_features is not None else None,
+                atom_features=atom_features[i] if atom_features is not None else None,
+                atom_descriptors=atom_descriptors[i] if atom_descriptors is not None else None,
+                bond_features=bond_features[i] if bond_features is not None else None,
+                bond_descriptors=bond_descriptors[i] if bond_descriptors is not None else None,
+                constraints=all_constraints_data[i] if constraints_data is not None else None,
+                raw_constraints=all_raw_constraints_data[i] if raw_constraints_data is not None else None,
+                overwrite_default_atom_features=args.overwrite_default_atom_features if args is not None else False,
+                overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False
+            ) for i, (smiles, targets, smiles_label, targets_label) in
+            tqdm(enumerate(zip(all_smiles, all_targets, all_smiles_label, all_targets_label)),
+                 total=len(all_smiles))
+        ])
+
+    # Filter out invalid SMILES
+    if skip_invalid_smiles:
+        original_data_len = len(data)
+        data = filter_invalid_smiles(data)
+
+        if len(data) < original_data_len:
+            debug(f'Warning: {original_data_len - len(data)} SMILES are invalid.')
+
+    return data
+
+
+# def get_multidata_old(path: str,
+#              smiles_columns: Union[str, List[str]] = None,
+#              target_columns: List[str] = None,
+#              ignore_columns: List[str] = None,
+#              skip_invalid_smiles: bool = True,
+#              args: Union[TrainArgs, PredictArgs] = None,
+#              data_weights_path: str = None,
+#              features_path: List[str] = None,
+#              features_generator: List[str] = None,
+#              phase_features_path: str = None,
+#              atom_descriptors_path: str = None,
+#              bond_descriptors_path: str = None,
+#              constraints_path: str = None,
+#              max_data_size: int = None,
+#              store_row: bool = False,
+#              logger: Logger = None,
+#              loss_function: str = None,
+#              skip_none_targets: bool = False) -> MoleculeDataset:
+#     """
+#     Gets SMILES and target values from a CSV file.
+#
+#     :param path: Path to a CSV file.
+#     :param smiles_columns: The names of the columns containing SMILES.
+#                            By default, uses the first :code:`number_of_molecules` columns.
+#     :param target_columns: Name of the columns containing target values. By default, uses all columns
+#                            except the :code:`smiles_column` and the :code:`ignore_columns`.
+#     :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+#     :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+#     :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+#     :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+#     :param features_path: A list of paths to files containing features. If provided, it is used
+#                           in place of :code:`args.features_path`.
+#     :param features_generator: A list of features generators to use. If provided, it is used
+#                                in place of :code:`args.features_generator`.
+#     :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+#     :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+#     :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+#     :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+#     :param max_data_size: The maximum number of data points to load.
+#     :param logger: A logger for recording output.
+#     :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+#     :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+#                               are passed in, so only a subset of tasks are examined.
+#     :param loss_function: The loss function to be used in training.
+#     :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+#              with other info such as additional features when desired.
+#     """
+#     debug = logger.debug if logger is not None else print
+#     if args is not None:
+#         # Prefer explicit function arguments but default to args if not provided
+#         smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+#         target_columns = target_columns if target_columns is not None else args.target_columns
+#         ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+#         features_path = features_path if features_path is not None else args.features_path
+#         features_generator = features_generator if features_generator is not None else args.features_generator
+#         phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+#         atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+#             else args.atom_descriptors_path
+#         bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+#             else args.bond_descriptors_path
+#         constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+#         max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+#         loss_function = loss_function if loss_function is not None else args.loss_function
+#     ###read smiles
+#     datasets = []
+#     for pathfolder in os.listdir(path):
+#         if os.path.isdir(os.path.join(path,pathfolder)):
+#             for pathfile in os.listdir(os.path.join(path,pathfolder)):
+#                 if pathfile.endswith('.csv'):
+#                     datasets.append(os.path.join(path,pathfolder,pathfile))
+#     debug(f"dataset_num:{len(datasets)}-----{datasets}")
+#
+#     if isinstance(smiles_columns, str) or smiles_columns is None:
+#         smiles_columns = preprocess_smiles_columns(path=datasets[0], smiles_columns=smiles_columns)
+#
+#     max_data_size = max_data_size or float('inf')
+#
+#     # Load features
+#     if features_path is not None:
+#         features_data = []
+#         for feat_path in features_path:
+#             features_data.append(load_features(feat_path))  # each is num_data x num_features
+#         features_data = np.concatenate(features_data, axis=1)
+#     else:
+#         features_data = None
+#
+#     if phase_features_path is not None:
+#         phase_features = load_features(phase_features_path)
+#         for d_phase in phase_features:
+#             if not (d_phase.sum() == 1 and np.count_nonzero(d_phase) == 1):
+#                 raise ValueError('Phase features must be one-hot encoded.')
+#         if features_data is not None:
+#             features_data = np.concatenate((features_data, phase_features), axis=1)
+#         else:  # if there are no other molecular features, phase features become the only molecular features
+#             features_data = np.array(phase_features)
+#     else:
+#         phase_features = None
+#
+#     # Load constraints
+#     if constraints_path is not None:
+#         constraints_data, raw_constraints_data = get_constraints(
+#             path=constraints_path,
+#             target_columns=args.target_columns,
+#             save_raw_data=args.save_smiles_splits
+#         )
+#     else:
+#         constraints_data = None
+#         raw_constraints_data = None
+#
+#     # Load data weights
+#     if data_weights_path is not None:
+#         data_weights = get_data_weights(data_weights_path)
+#     else:
+#         data_weights = None
+#
+#     # By default, the targets columns are all the columns except the SMILES column
+#     if target_columns is None:
+#         target_columns = get_task_names(
+#             path=path,
+#             smiles_columns=smiles_columns,
+#             target_columns=target_columns,
+#             ignore_columns=ignore_columns,
+#         )
+#
+#     # Find targets provided as inequalities
+#     if loss_function == 'bounded_mse':
+#         gt_targets, lt_targets = get_inequality_targets(path=path, target_columns=target_columns)
+#     else:
+#         gt_targets, lt_targets = None, None
+#
+#     # 初始化字典来保存每个文件的数据
+#     file_data = {}
+#
+#     for pathfile in datasets:
+#         file_data[pathfile] = {'smiles': [], 'targets': [], 'atom_targets': [],
+#                                'bond_targets': []}  # Initialize the list of each file
+#
+#         with open(pathfile) as f:
+#             reader = csv.DictReader(f)
+#             fieldname = os.path.splitext(os.path.basename(pathfile))[0]
+#             fieldnames = reader.fieldnames
+#             if any([c is not None and c not in fieldnames for c in smiles_columns]):
+#                 raise ValueError(
+#                     f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
+#             if any([c is not None and c not in fieldnames for c in target_columns]):
+#                 raise ValueError(
+#                     f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
+#
+#             all_smiles, all_targets, all_atom_targets, all_bond_targets, all_rows, all_features, all_phase_features, all_constraints_data, all_raw_constraints_data, all_weights, all_gt, all_lt = [], [], [], [], [], [], [], [], [], [], [], []
+#             for i, row in enumerate(tqdm(reader)):
+#                 smiles = [row[c] for c in smiles_columns]
+#
+#                 targets, atom_targets, bond_targets = [], [], []
+#                 for column in target_columns:
+#                     value = row[column]
+#                     if value in ['', 'nan']:
+#                         targets.append(None)
+#                     elif '>' in value or '<' in value:
+#                         if loss_function == 'bounded_mse':
+#                             targets.append(float(value.strip('<>')))
+#                         else:
+#                             raise ValueError(
+#                                 'Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
+#                     elif '[' in value or ']' in value:
+#                         value = value.replace('None', 'null')
+#                         target = np.array(json.loads(value))
+#                         if len(target.shape) == 1 and column in args.atom_targets:
+#                             atom_targets.append(target)
+#                             targets.append(target)
+#                         elif len(target.shape) == 1 and column in args.bond_targets:
+#                             bond_targets.append(target)
+#                             targets.append(target)
+#                         elif len(target.shape) == 2:
+#                             bond_target_arranged = []
+#                             mol = make_mol(smiles[0], args.explicit_h, args.adding_h, args.keeping_atom_map)
+#                             for bond in mol.GetBonds():
+#                                 bond_target_arranged.append(
+#                                     target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
+#                             bond_targets.append(np.array(bond_target_arranged))
+#                             targets.append(np.array(bond_target_arranged))
+#                         else:
+#                             raise ValueError(f'Unrecognized targets of column {column} in {path}.')
+#                     else:
+#                         targets.append(float(value))
+#
+#                 if skip_none_targets and all(x is None for x in targets):
+#                     continue
+#
+#                 # # 将数据添加到相应的文件字典中
+#                 # file_data[pathfile]['smiles'].append(smiles)
+#                 # file_data[pathfile]['targets'].append(targets)
+#                 # file_data[pathfile]['atom_targets'].append(atom_targets)
+#                 # file_data[pathfile]['bond_targets'].append(bond_targets)
+#                 all_smiles.append(smiles)
+#                 all_targets.append(targets)
+#                 all_atom_targets.append(atom_targets)
+#                 all_bond_targets.append(bond_targets)
+#
+#                 if features_data is not None:
+#                     all_features.append(features_data[i])
+#
+#                 if phase_features is not None:
+#                     all_phase_features.append(phase_features[i])
+#
+#                 if constraints_data is not None:
+#                     all_constraints_data.append(constraints_data[i])
+#
+#                 if raw_constraints_data is not None:
+#                     all_raw_constraints_data.append(raw_constraints_data[i])
+#
+#                 if data_weights is not None:
+#                     all_weights.append(data_weights[i])
+#
+#                 if gt_targets is not None:
+#                     all_gt.append(gt_targets[i])
+#
+#                 if lt_targets is not None:
+#                     all_lt.append(lt_targets[i])
+#
+#                 if store_row:
+#                     all_rows.append(row)
+#
+#                 if len(all_smiles) >= max_data_size:
+#                     break
+#
+#
+#             atom_features = None
+#             atom_descriptors = None
+#             if args is not None and args.atom_descriptors is not None:
+#                 try:
+#                     descriptors = load_valid_atom_or_bond_features(atom_descriptors_path, [x[0] for x in all_smiles])
+#                 except Exception as e:
+#                     raise ValueError(f'Failed to load or validate custom atomic descriptors or features: {e}')
+#
+#                 if args.atom_descriptors == 'feature':
+#                     atom_features = descriptors
+#                 elif args.atom_descriptors == 'descriptor':
+#                     atom_descriptors = descriptors
+#
+#             bond_features = None
+#             bond_descriptors = None
+#             if args is not None and args.bond_descriptors is not None:
+#                 try:
+#                     descriptors = load_valid_atom_or_bond_features(bond_descriptors_path, [x[0] for x in all_smiles])
+#                 except Exception as e:
+#                     raise ValueError(f'Failed to load or validate custom bond descriptors or features: {e}')
+#
+#                 if args.bond_descriptors == 'feature':
+#                     bond_features = descriptors
+#                 elif args.bond_descriptors == 'descriptor':
+#                     bond_descriptors = descriptors
+#
+#             data = MoleculeDataset([
+#                 MoleculeDatapoint(
+#                     smiles=smiles,
+#                     targets=targets,
+#                     atom_targets=all_atom_targets[i] if atom_targets else None,
+#                     bond_targets=all_bond_targets[i] if bond_targets else None,
+#                     row=all_rows[i] if store_row else None,
+#                     data_weight=all_weights[i] if data_weights is not None else None,
+#                     gt_targets=all_gt[i] if gt_targets is not None else None,
+#                     lt_targets=all_lt[i] if lt_targets is not None else None,
+#                     features_generator=features_generator,
+#                     features=all_features[i] if features_data is not None else None,
+#                     phase_features=all_phase_features[i] if phase_features is not None else None,
+#                     atom_features=atom_features[i] if atom_features is not None else None,
+#                     atom_descriptors=atom_descriptors[i] if atom_descriptors is not None else None,
+#                     bond_features=bond_features[i] if bond_features is not None else None,
+#                     bond_descriptors=bond_descriptors[i] if bond_descriptors is not None else None,
+#                     constraints=all_constraints_data[i] if constraints_data is not None else None,
+#                     raw_constraints=all_raw_constraints_data[i] if raw_constraints_data is not None else None,
+#                     overwrite_default_atom_features=args.overwrite_default_atom_features if args is not None else False,
+#                     overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False
+#                 ) for i, (smiles, targets) in tqdm(enumerate(zip(all_smiles, all_targets)),
+#                                                 total=len(all_smiles))
+#             ])
+#
+#     # Filter out invalid SMILES
+#     if skip_invalid_smiles:
+#         original_data_len = len(data)
+#         data = filter_invalid_smiles(data)
+#
+#         if len(data) < original_data_len:
+#             debug(f'Warning: {original_data_len - len(data)} SMILES are invalid.')
+#
+#     return data
+#
+# def get_multidata_10(path: str,
+#              smiles_columns: Union[str, List[str]] = None,
+#              target_columns: List[str] = None,
+#              ignore_columns: List[str] = None,
+#              skip_invalid_smiles: bool = True,
+#              args: Union[TrainArgs, PredictArgs] = None,
+#              data_weights_path: str = None,
+#              features_path: List[str] = None,
+#              features_generator: List[str] = None,
+#              phase_features_path: str = None,
+#              atom_descriptors_path: str = None,
+#              bond_descriptors_path: str = None,
+#              constraints_path: str = None,
+#              max_data_size: int = None,
+#              store_row: bool = False,
+#              logger: Logger = None,
+#              loss_function: str = None,
+#              skip_none_targets: bool = False) -> MoleculeDataset:
+#     """
+#     Gets SMILES and target values from a CSV file.
+#
+#     :param path: Path to a CSV file.
+#     :param smiles_columns: The names of the columns containing SMILES.
+#                            By default, uses the first :code:`number_of_molecules` columns.
+#     :param target_columns: Name of the columns containing target values. By default, uses all columns
+#                            except the :code:`smiles_column` and the :code:`ignore_columns`.
+#     :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+#     :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+#     :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+#     :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+#     :param features_path: A list of paths to files containing features. If provided, it is used
+#                           in place of :code:`args.features_path`.
+#     :param features_generator: A list of features generators to use. If provided, it is used
+#                                in place of :code:`args.features_generator`.
+#     :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+#     :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+#     :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+#     :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+#     :param max_data_size: The maximum number of data points to load.
+#     :param logger: A logger for recording output.
+#     :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+#     :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+#                               are passed in, so only a subset of tasks are examined.
+#     :param loss_function: The loss function to be used in training.
+#     :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+#              with other info such as additional features when desired.
+#     """
+#     debug = logger.debug if logger is not None else print
+#     if args is not None:
+#         # Prefer explicit function arguments but default to args if not provided
+#         smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+#         target_columns = target_columns if target_columns is not None else args.target_columns
+#         ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+#         features_path = features_path if features_path is not None else args.features_path
+#         features_generator = features_generator if features_generator is not None else args.features_generator
+#         phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+#         atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+#             else args.atom_descriptors_path
+#         bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+#             else args.bond_descriptors_path
+#         constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+#         max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+#         loss_function = loss_function if loss_function is not None else args.loss_function
+#     ###read smiles
+#     datasets = []
+#     for pathfolder in os.listdir(path):
+#         if os.path.isdir(os.path.join(path,pathfolder)):
+#             for pathfile in os.listdir(os.path.join(path,pathfolder)):
+#                 if pathfile.endswith('.csv'):
+#                     datasets.append(os.path.join(path,pathfolder,pathfile))
+#     debug(f"dataset_num:{len(datasets)}-----{datasets}")
+#
+#     from torch.utils.data import ConcatDataset
+#
+#     data = []
+#     for pathfile in datasets:
+#         data.append(get_data(path=pathfile,
+#                              smiles_columns=smiles_columns,
+#                              target_columns=target_columns,
+#                              ignore_columns=ignore_columns,
+#                              skip_invalid_smiles=skip_invalid_smiles,
+#                              args=args,
+#                              data_weights_path=data_weights_path,
+#                              features_path=features_path,
+#                              features_generator=features_generator,
+#                              phase_features_path=phase_features_path,
+#                              atom_descriptors_path=atom_descriptors_path,
+#                              bond_descriptors_path=bond_descriptors_path,
+#                              constraints_path=constraints_path,
+#                              max_data_size=max_data_size,
+#                              store_row=store_row,
+#                              logger=logger,
+#                              loss_function=loss_function,
+#                              skip_none_targets=skip_none_targets))
+#
+#
+#     combined_datasets = MoleculeDataset([])
+#
+#     # Gradually extract one tenth of the data from each data point and merge it into one dataset
+#     for i in range(10):
+#
+#         # Temporary dataset used to store one percent of the current data
+#         combined_dataset_i = MoleculeDataset([])
+#
+#         # 合并每个数据集的属性
+#         for datapoint in data:
+#             datapoint_size = len(datapoint) // 10  # 10% of each data point dataset
+#             remainder = len(datapoint) % 10  # 余数，不够除的部分
+#
+#             # 根据当前迭代确定应该取多少数据点
+#             if i < remainder:
+#                 datapoint_size += 1
+#
+#             for attr in combined_dataset_i.__dict__:
+#                 if hasattr(datapoint, attr):
+#                     value = getattr(datapoint, attr)
+#                     if isinstance(value, (list, tuple)):
+#                         value = value[i * datapoint_size:(i + 1) * datapoint_size]  # 只取当前百分之一的数据
+#                         current_value = getattr(combined_dataset_i, attr)
+#
+#                         if isinstance(current_value, (list, tuple)):
+#                             setattr(combined_dataset_i, attr, current_value + value)
+#                         elif isinstance(current_value, dict):
+#                             if not current_value:
+#                                 setattr(combined_dataset_i, attr, value)
+#                             else:
+#                                 for key in value.keys():
+#                                     current_value[key] += value[key]
+#                                 setattr(combined_dataset_i, attr, current_value)
+#                         else:
+#                             setattr(combined_dataset_i, attr, value)
+#
+#         # 将当前的 combined_dataset_i 合并到总的 combined_datasets 中
+#         for attr in combined_dataset_i.__dict__:
+#             if hasattr(combined_datasets, attr):
+#                 current_value = getattr(combined_datasets, attr)
+#                 new_value = getattr(combined_dataset_i, attr)
+#                 if isinstance(current_value, (list, tuple)):
+#                     setattr(combined_datasets, attr, current_value + new_value)
+#                 elif isinstance(current_value, dict):
+#                     if not current_value:
+#                         setattr(combined_datasets, attr, new_value)
+#                     else:
+#                         for key in new_value.keys():
+#                             current_value[key] += new_value[key]
+#                         setattr(combined_datasets, attr, current_value)
+#                 else:
+#                     setattr(combined_datasets, attr, new_value)
+#
+#
+#
+#     return combined_datasets
+#
+# def get_multidata101(path: str,
+#              smiles_columns: Union[str, List[str]] = None,
+#              target_columns: List[str] = None,
+#              ignore_columns: List[str] = None,
+#              skip_invalid_smiles: bool = True,
+#              args: Union[TrainArgs, PredictArgs] = None,
+#              data_weights_path: str = None,
+#              features_path: List[str] = None,
+#              features_generator: List[str] = None,
+#              phase_features_path: str = None,
+#              atom_descriptors_path: str = None,
+#              bond_descriptors_path: str = None,
+#              constraints_path: str = None,
+#              max_data_size: int = None,
+#              store_row: bool = False,
+#              logger: Logger = None,
+#              loss_function: str = None,
+#              skip_none_targets: bool = False) -> MoleculeDataset:
+#     """
+#     Gets SMILES and target values from a CSV file.
+#
+#     :param path: Path to a CSV file.
+#     :param smiles_columns: The names of the columns containing SMILES.
+#                            By default, uses the first :code:`number_of_molecules` columns.
+#     :param target_columns: Name of the columns containing target values. By default, uses all columns
+#                            except the :code:`smiles_column` and the :code:`ignore_columns`.
+#     :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+#     :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+#     :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+#     :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+#     :param features_path: A list of paths to files containing features. If provided, it is used
+#                           in place of :code:`args.features_path`.
+#     :param features_generator: A list of features generators to use. If provided, it is used
+#                                in place of :code:`args.features_generator`.
+#     :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+#     :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+#     :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+#     :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+#     :param max_data_size: The maximum number of data points to load.
+#     :param logger: A logger for recording output.
+#     :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+#     :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+#                               are passed in, so only a subset of tasks are examined.
+#     :param loss_function: The loss function to be used in training.
+#     :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+#              with other info such as additional features when desired.
+#     """
+#     debug = logger.debug if logger is not None else print
+#     if args is not None:
+#         # Prefer explicit function arguments but default to args if not provided
+#         smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+#         target_columns = target_columns if target_columns is not None else args.target_columns
+#         ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+#         features_path = features_path if features_path is not None else args.features_path
+#         features_generator = features_generator if features_generator is not None else args.features_generator
+#         phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+#         atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+#             else args.atom_descriptors_path
+#         bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+#             else args.bond_descriptors_path
+#         constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+#         max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+#         loss_function = loss_function if loss_function is not None else args.loss_function
+#     ###read smiles
+#     datasets = []
+#     for pathfolder in os.listdir(path):
+#         if os.path.isdir(os.path.join(path,pathfolder)):
+#             for pathfile in os.listdir(os.path.join(path,pathfolder)):
+#                 if pathfile.endswith('.csv'):
+#                     datasets.append(os.path.join(path,pathfolder,pathfile))
+#     debug(f"dataset_num:{len(datasets)}-----{datasets}")
+#
+#     from torch.utils.data import ConcatDataset
+#
+#     data = []
+#     for pathfile in datasets:
+#         data.append(get_data(path=pathfile,
+#                              smiles_columns=smiles_columns,
+#                              target_columns=target_columns,
+#                              ignore_columns=ignore_columns,
+#                              skip_invalid_smiles=skip_invalid_smiles,
+#                              args=args,
+#                              data_weights_path=data_weights_path,
+#                              features_path=features_path,
+#                              features_generator=features_generator,
+#                              phase_features_path=phase_features_path,
+#                              atom_descriptors_path=atom_descriptors_path,
+#                              bond_descriptors_path=bond_descriptors_path,
+#                              constraints_path=constraints_path,
+#                              max_data_size=max_data_size,
+#                              store_row=store_row,
+#                              logger=logger,
+#                              loss_function=loss_function,
+#                              skip_none_targets=skip_none_targets))
+#
+#     # print(f"dataset_num:{len(data)}-----{dir(data[0])}\n\n\n\n")
+#
+#     combined_datasets = MoleculeDataset([])
+#
+#     # 逐步从每个数据点中取出十分之一的数据，并合并成一个数据集
+#     for i in range(10):
+#
+#         # 临时数据集，用于存储当前百分之一的数据
+#         combined_dataset_i = MoleculeDataset([])
+#
+#         # 合并每个数据集的属性
+#         for datapoint in data:
+#             datapoint_size = len(datapoint) // 10  # 每个数据点数据集的百分之十
+#             remainder = len(datapoint) % 10  # 余数，不够除的部分
+#
+#             # 根据当前迭代确定应该取多少数据点
+#             if i < remainder:
+#                 datapoint_size += 1
+#
+#             for attr in combined_dataset_i.__dict__:
+#                 if hasattr(datapoint, attr):
+#                     value = getattr(datapoint, attr)
+#                     if isinstance(value, (list, tuple)):
+#                         value = value[i * datapoint_size:(i + 1) * datapoint_size]  # 只取当前百分之一的数据
+#                         current_value = getattr(combined_dataset_i, attr)
+#
+#                         if isinstance(current_value, (list, tuple)):
+#                             setattr(combined_dataset_i, attr, current_value + value)
+#                         elif isinstance(current_value, dict):
+#                             if not current_value:
+#                                 setattr(combined_dataset_i, attr, value)
+#                             else:
+#                                 for key in value.keys():
+#                                     current_value[key] += value[key]
+#                                 setattr(combined_dataset_i, attr, current_value)
+#                         else:
+#                             setattr(combined_dataset_i, attr, value)
+#
+#         # 将当前的 combined_dataset_i 合并到总的 combined_datasets 中
+#         for attr in combined_dataset_i.__dict__:
+#             if hasattr(combined_datasets, attr):
+#                 current_value = getattr(combined_datasets, attr)
+#                 new_value = getattr(combined_dataset_i, attr)
+#                 if isinstance(current_value, (list, tuple)):
+#                     setattr(combined_datasets, attr, current_value + new_value)
+#                 elif isinstance(current_value, dict):
+#                     if not current_value:
+#                         setattr(combined_datasets, attr, new_value)
+#                     else:
+#                         for key in new_value.keys():
+#                             current_value[key] += new_value[key]
+#                         setattr(combined_datasets, attr, current_value)
+#                 else:
+#                     setattr(combined_datasets, attr, new_value)
+#
+#         # print(f"------{dir(combined_dataset_i)}")
+#
+#     return combined_datasets
+#
+#
+# def get_multidata_dynamic(path: str,
+#              smiles_columns: Union[str, List[str]] = None,
+#              target_columns: List[str] = None,
+#              ignore_columns: List[str] = None,
+#              skip_invalid_smiles: bool = True,
+#              args: Union[TrainArgs, PredictArgs] = None,
+#              data_weights_path: str = None,
+#              features_path: List[str] = None,
+#              features_generator: List[str] = None,
+#              phase_features_path: str = None,
+#              atom_descriptors_path: str = None,
+#              bond_descriptors_path: str = None,
+#              constraints_path: str = None,
+#              max_data_size: int = None,
+#              store_row: bool = False,
+#              logger: Logger = None,
+#              loss_function: str = None,
+#              skip_none_targets: bool = False) -> MoleculeDataset:
+#     """
+#     Gets SMILES and target values from a CSV file.
+#
+#     :param path: Path to a CSV file.
+#     :param smiles_columns: The names of the columns containing SMILES.
+#                            By default, uses the first :code:`number_of_molecules` columns.
+#     :param target_columns: Name of the columns containing target values. By default, uses all columns
+#                            except the :code:`smiles_column` and the :code:`ignore_columns`.
+#     :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+#     :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+#     :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+#     :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+#     :param features_path: A list of paths to files containing features. If provided, it is used
+#                           in place of :code:`args.features_path`.
+#     :param features_generator: A list of features generators to use. If provided, it is used
+#                                in place of :code:`args.features_generator`.
+#     :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+#     :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+#     :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+#     :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+#     :param max_data_size: The maximum number of data points to load.
+#     :param logger: A logger for recording output.
+#     :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+#     :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+#                               are passed in, so only a subset of tasks are examined.
+#     :param loss_function: The loss function to be used in training.
+#     :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+#              with other info such as additional features when desired.
+#     """
+#     debug = logger.debug if logger is not None else print
+#     if args is not None:
+#         # Prefer explicit function arguments but default to args if not provided
+#         smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+#         target_columns = target_columns if target_columns is not None else args.target_columns
+#         ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+#         features_path = features_path if features_path is not None else args.features_path
+#         features_generator = features_generator if features_generator is not None else args.features_generator
+#         phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+#         atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+#             else args.atom_descriptors_path
+#         bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+#             else args.bond_descriptors_path
+#         constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+#         max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+#         loss_function = loss_function if loss_function is not None else args.loss_function
+#     ###read smiles
+#     datasets = []
+#     for pathfolder in os.listdir(path):
+#         if os.path.isdir(os.path.join(path,pathfolder)):
+#             for pathfile in os.listdir(os.path.join(path,pathfolder)):
+#                 if pathfile.endswith('.csv'):
+#                     datasets.append(os.path.join(path,pathfolder,pathfile))
+#     debug(f"dataset_num:{len(datasets)}-----{datasets}")
+#
+#     import random
+#
+#     data = []
+#     total_samples = 0  # Calculate the total number of samples for all datasets
+#     max_samples_per_dataset = 1000  # Maximum number of samples per dataset
+#
+#     for pathfile in datasets:
+#         data_i = get_data(path=pathfile,
+#                           smiles_columns=smiles_columns,
+#                           target_columns=target_columns,
+#                           ignore_columns=ignore_columns,
+#                           skip_invalid_smiles=skip_invalid_smiles,
+#                           args=args,
+#                           data_weights_path=data_weights_path,
+#                           features_path=features_path,
+#                           features_generator=features_generator,
+#                           phase_features_path=phase_features_path,
+#                           atom_descriptors_path=atom_descriptors_path,
+#                           bond_descriptors_path=bond_descriptors_path,
+#                           constraints_path=constraints_path,
+#                           max_data_size=max_data_size,
+#                           store_row=store_row,
+#                           logger=logger,
+#                           loss_function=loss_function,
+#                           skip_none_targets=skip_none_targets)
+#         data.append(data_i)
+#         total_samples += len(data_i)
+#
+#
+#
+#     combined_datasets = MoleculeDataset([])
+#
+#     # Weighted sampling parameters
+#     temperature = 0.5  # Set temperature parameters
+#     # Dynamic adjustment of temperature parameters
+#     temperature_factor = 0.1  # Temperature parameter adjustment factor
+#
+#     # Calculate the average number of samples for each dataset
+#     average_samples_per_dataset = total_samples / len(data)
+#
+#     # Gradually sample data from each data point and merge it into one dataset
+#     i = 0
+#     for datapoint in data:
+#         # Calculate the weight of the current dataset
+#         weight_i = (average_samples_per_dataset / len(datapoint)) ** (1 / temperature)
+#         # print(f"weight_i:{weight_i}\n")
+#         # Sample the current dataset
+#         if weight_i == 0:  # If the weight is 0, skip the current dataset
+#             continue
+#
+#         sampled_size = max(1, int(len(datapoint) * weight_i))  # The minimum sampling quantity is 1
+#         sampled_size = min(sampled_size, len(datapoint))  # Correct the sampling quantity to not exceed the total number of data points
+#         print(f"{i}sampled_size:{sampled_size}\n")
+#
+#         # Randomly sampling data points
+#         sampled_indices = random.sample(range(len(datapoint)), sampled_size)
+#
+#         # Add sampled data points to the total combined_datasets
+#         for attr in combined_datasets.__dict__:
+#             if hasattr(datapoint, attr):
+#                 value = getattr(datapoint, attr)
+#                 if isinstance(value, (list, tuple)):
+#                     sampled_values = [value[i] for i in sampled_indices]
+#                     current_value = getattr(combined_datasets, attr)
+#
+#                     if isinstance(current_value, (list, tuple)):
+#                         setattr(combined_datasets, attr, current_value + sampled_values)
+#                     elif isinstance(current_value, dict):
+#                         if not current_value:
+#                             setattr(combined_datasets, attr, sampled_values)
+#                         else:
+#                             for j, key in enumerate(current_value.keys()):
+#                                 current_value[key] += sampled_values[j]
+#                             setattr(combined_datasets, attr, current_value)
+#                     else:
+#                         setattr(combined_datasets, attr, sampled_values)
+#         # Add sampled data points to the total combined_datasets
+#         temperature -= temperature_factor * temperature
+#         i += 1
+#
+#     return combined_datasets
+
+def get_multidata(path: str,
+                  smiles_columns: Union[str, List[str]] = None,
+                  target_columns: List[str] = None,
+                  ignore_columns: List[str] = None,
+                  skip_invalid_smiles: bool = True,
+                  args: Union[TrainArgs, PredictArgs] = None,
+                  data_weights_path: str = None,
+                  features_path: List[str] = None,
+                  features_generator: List[str] = None,
+                  phase_features_path: str = None,
+                  atom_descriptors_path: str = None,
+                  bond_descriptors_path: str = None,
+                  constraints_path: str = None,
+                  max_data_size: int = None,
+                  store_row: bool = False,
+                  logger: Logger = None,
+                  loss_function: str = None,
+                  skip_none_targets: bool = False) -> MoleculeDataset:
+    """
+    Gets SMILES and target values from a CSV file.
+
+    :param path: Path to a CSV file.
+    :param smiles_columns: The names of the columns containing SMILES.
+                           By default, uses the first :code:`number_of_molecules` columns.
+    :param target_columns: Name of the columns containing target values. By default, uses all columns
+                           except the :code:`smiles_column` and the :code:`ignore_columns`.
+    :param ignore_columns: Name of the columns to ignore when :code:`target_columns` is not provided.
+    :param skip_invalid_smiles: Whether to skip and filter out invalid smiles using :func:`filter_invalid_smiles`.
+    :param args: Arguments, either :class:`~chemprop.args.TrainArgs` or :class:`~chemprop.args.PredictArgs`.
+    :param data_weights_path: A path to a file containing weights for each molecule in the loss function.
+    :param features_path: A list of paths to files containing features. If provided, it is used
+                          in place of :code:`args.features_path`.
+    :param features_generator: A list of features generators to use. If provided, it is used
+                               in place of :code:`args.features_generator`.
+    :param phase_features_path: A path to a file containing phase features as applicable to spectra.
+    :param atom_descriptors_path: The path to the file containing the custom atom descriptors.
+    :param bond_descriptors_path: The path to the file containing the custom bond descriptors.
+    :param constraints_path: The path to the file containing constraints applied to different atomic/bond properties.
+    :param max_data_size: The maximum number of data points to load.
+    :param logger: A logger for recording output.
+    :param store_row: Whether to store the raw CSV row in each :class:`~chemprop.data.data.MoleculeDatapoint`.
+    :param skip_none_targets: Whether to skip targets that are all 'None'. This is mostly relevant when --target_columns
+                              are passed in, so only a subset of tasks are examined.
+    :param loss_function: The loss function to be used in training.
+    :return: A :class:`~chemprop.data.MoleculeDataset` containing SMILES and target values along
+             with other info such as additional features when desired.
+    """
+    debug = logger.debug if logger is not None else print
+    if args is not None:
+        # Prefer explicit function arguments but default to args if not provided
+        smiles_columns = smiles_columns if smiles_columns is not None else args.smiles_columns
+        target_columns = target_columns if target_columns is not None else args.target_columns
+        ignore_columns = ignore_columns if ignore_columns is not None else args.ignore_columns
+        features_path = features_path if features_path is not None else args.features_path
+        features_generator = features_generator if features_generator is not None else args.features_generator
+        phase_features_path = phase_features_path if phase_features_path is not None else args.phase_features_path
+        atom_descriptors_path = atom_descriptors_path if atom_descriptors_path is not None \
+            else args.atom_descriptors_path
+        bond_descriptors_path = bond_descriptors_path if bond_descriptors_path is not None \
+            else args.bond_descriptors_path
+        constraints_path = constraints_path if constraints_path is not None else args.constraints_path
+        max_data_size = max_data_size if max_data_size is not None else args.max_data_size
+        loss_function = loss_function if loss_function is not None else args.loss_function
+    ###read smiles
+    datasets = []
+    for pathfolder in os.listdir(path):
+        if os.path.isdir(os.path.join(path, pathfolder)):
+            for pathfile in os.listdir(os.path.join(path, pathfolder)):
+                if pathfile.endswith('.csv'):
+                    datasets.append(os.path.join(path, pathfolder, pathfile))
+    debug(f"dataset_num:{len(datasets)}-----{datasets}")
+
+    import random
+
+    data = []
+    total_samples = 0  # Calculate the total number of samples for all datasets
+
+    for pathfile in datasets:
+        data_i = get_data(path=pathfile,
+                          smiles_columns=smiles_columns,
+                          target_columns=target_columns,
+                          ignore_columns=ignore_columns,
+                          skip_invalid_smiles=skip_invalid_smiles,
+                          args=args,
+                          data_weights_path=data_weights_path,
+                          features_path=features_path,
+                          features_generator=features_generator,
+                          phase_features_path=phase_features_path,
+                          atom_descriptors_path=atom_descriptors_path,
+                          bond_descriptors_path=bond_descriptors_path,
+                          constraints_path=constraints_path,
+                          max_data_size=max_data_size,
+                          store_row=store_row,
+                          logger=logger,
+                          loss_function=loss_function,
+                          skip_none_targets=skip_none_targets)
+        data.append(data_i)
+        total_samples += len(data_i)
+
+    combined_datasets = MoleculeDataset([])
+
+    # Weighted sampling parameters
+    temperature = 0.5  # Set temperature parameters
+
+    i = 0
+    for datapoint in data:
+        # Calculate the weight of the current dataset
+        weight_i = (len(datapoint) / total_samples) ** (1 / temperature)
+        # Sample the current dataset
+        if weight_i == 0:  # If the weight is 0, skip the current dataset
+            continue
+
+        sampled_size = max(1, int(len(datapoint) * weight_i))  # The minimum sampling quantity is 1
+        sampled_size = min(sampled_size,
+                           len(datapoint))  # Correct the sampling quantity to not exceed the total number of data points
+        print(f"{i}sampled_size:{sampled_size}\n")
+
+        # Randomly sampling data points
+        sampled_indices = random.sample(range(len(datapoint)), sampled_size)
+
+        # Add sampled data points to the total combined_datasets
+        for attr in combined_datasets.__dict__:
+            if hasattr(datapoint, attr):
+                value = getattr(datapoint, attr)
+                if isinstance(value, (list, tuple)):
+                    sampled_values = [value[i] for i in sampled_indices]
+                    current_value = getattr(combined_datasets, attr)
+
+                    if isinstance(current_value, (list, tuple)):
+                        setattr(combined_datasets, attr, current_value + sampled_values)
+                    elif isinstance(current_value, dict):
+                        if not current_value:
+                            setattr(combined_datasets, attr, sampled_values)
+                        else:
+                            for j, key in enumerate(current_value.keys()):
+                                current_value[key] += sampled_values[j]
+                            setattr(combined_datasets, attr, current_value)
+                    else:
+                        setattr(combined_datasets, attr, sampled_values)
+        # Add sampled data points to the total combined_datasets
+        # temperature -= temperature_factor * temperature
+        i += 1
+
+    return combined_datasets
 
 
 def get_data_from_smiles(smiles: List[List[str]],
@@ -672,9 +1881,11 @@ def get_inequality_targets(path: str, target_columns: List[str] = None) -> List[
             gt_targets.append(['>' in val for val in values])
             lt_targets.append(['<' in val for val in values])
             if any(['<' in val and '>' in val for val in values]):
-                raise ValueError(f'A target value in csv file {path} contains both ">" and "<" symbols. Inequality targets must be on one edge and not express a range.')
+                raise ValueError(
+                    f'A target value in csv file {path} contains both ">" and "<" symbols. Inequality targets must be on one edge and not express a range.')
 
     return gt_targets, lt_targets
+
 
 def split_data(data: MoleculeDataset,
                split_type: str = 'random',
@@ -684,8 +1895,8 @@ def split_data(data: MoleculeDataset,
                num_folds: int = 1,
                args: TrainArgs = None,
                logger: Logger = None) -> Tuple[MoleculeDataset,
-                                               MoleculeDataset,
-                                               MoleculeDataset]:
+MoleculeDataset,
+MoleculeDataset]:
     r"""
     Splits data into training, validation, and test splits.
 
@@ -727,7 +1938,8 @@ def split_data(data: MoleculeDataset,
 
     elif split_type in {'cv', 'cv-no-test'}:
         if num_folds <= 1 or num_folds > len(data):
-            raise ValueError(f'Number of folds for cross-validation must be between 2 and the number of valid datapoints ({len(data)}), inclusive.')
+            raise ValueError(
+                f'Number of folds for cross-validation must be between 2 and the number of valid datapoints ({len(data)}), inclusive.')
 
         random = Random(0)
 
@@ -800,7 +2012,8 @@ def split_data(data: MoleculeDataset,
         return MoleculeDataset(train), MoleculeDataset(val), MoleculeDataset(test)
 
     elif split_type == 'scaffold_balanced':
-        return scaffold_split(data, sizes=sizes, balanced=True, key_molecule_index=key_molecule_index, seed=seed, logger=logger)
+        return scaffold_split(data, sizes=sizes, balanced=True, key_molecule_index=key_molecule_index, seed=seed,
+                              logger=logger)
 
     elif split_type == 'random_with_repeated_smiles':  # Use to constrain data with the same smiles go in the same split.
         smiles_dict = defaultdict(set)
@@ -813,7 +2026,7 @@ def split_data(data: MoleculeDataset,
         train_size = int(sizes[0] * len(data))
         val_size = int(sizes[1] * len(data))
         for index_set in index_sets:
-            if len(train)+len(index_set) <= train_size:
+            if len(train) + len(index_set) <= train_size:
                 train += index_set
             elif len(val) + len(index_set) <= val_size:
                 val += index_set
@@ -908,7 +2121,7 @@ def validate_dataset_type(data: MoleculeDataset, dataset_type: str) -> None:
     :param dataset_type: The dataset type to check.
     """
     target_list = [target for targets in data.targets() for target in targets]
-
+    # print(f"---{len(target_list)}===={target_list}")
     if data.is_atom_bond_targets:
         target_set = set(list(np.concatenate(target_list).flat)) - {None}
     else:

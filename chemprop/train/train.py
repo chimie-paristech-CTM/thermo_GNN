@@ -53,10 +53,22 @@ def train(
     for batch in tqdm(data_loader, total=len(data_loader), leave=False):
         # Prepare batch
         batch: MoleculeDataset
-        mol_batch, features_batch, target_batch, mask_batch, atom_descriptors_batch, atom_features_batch, bond_descriptors_batch, bond_features_batch, constraints_batch, data_weights_batch = \
+        mol_batch, features_batch, target_batch, mask_batch, atom_descriptors_batch, atom_features_batch, bond_descriptors_batch, bond_features_batch, constraints_batch, data_weights_batch, data_smiles_label, targets_label= \
             batch.batch_graph(), batch.features(), batch.targets(), batch.mask(), batch.atom_descriptors(), \
-            batch.atom_features(), batch.bond_descriptors(), batch.bond_features(), batch.constraints(), batch.data_weights()
-
+            batch.atom_features(), batch.bond_descriptors(), batch.bond_features(), batch.constraints(), batch.data_weights(), batch.smiles_label(), batch.targets_label()
+        if args.smiles_label_values is not None:
+            if args.multidata == 'multi':
+                items_dict = {item.split(',')[0]: float(item.split(',')[1]) for item in args.smiles_label_values}
+                updated_smiles_label = [items_dict[label] for label in data_smiles_label]
+            elif args.multidata == 'multi_single_input':
+                items_dict = {item.split(',')[0]: float(item.split(',')[1]) for item in args.smiles_label_values}
+                updated_smiles_label = [items_dict[label[0]] for label in targets_label]
+            elif args.smiles_label_values == 'None':
+                pass
+            else:
+                raise ValueError(f"Invalid multidata")
+        else:
+            updated_smiles_label = 1.0
         if model.is_atom_bond_targets:
             targets = []
             for dt in zip(*target_batch):
@@ -168,9 +180,6 @@ def train(
                     loss = loss_func(pred, target, args.evidential_regularization) * target_weight * data_weight * mask
                 elif args.loss_function == "dirichlet" and args.dataset_type == "classification":
                     loss = loss_func(pred, target, args.evidential_regularization) * target_weight * data_weight * mask
-                elif args.loss_function == "quantile_interval":
-                    quantiles_tensor = torch.tensor(args.quantiles, device=torch_device)
-                    loss = loss_func(pred, target, quantiles_tensor) * target_weight * data_weight * mask
                 else:
                     raise ValueError(f'Dataset type "{args.dataset_type}" is not supported.')
                 loss = loss.sum() / mask.sum()
@@ -208,12 +217,12 @@ def train(
                 loss = loss_func(preds, targets, args.evidential_regularization) * target_weights * data_weights * masks
             elif args.loss_function == "dirichlet":  # classification
                 loss = loss_func(preds, targets, args.evidential_regularization) * target_weights * data_weights * masks
-            elif args.loss_function == "quantile_interval":
-                quantiles_tensor = torch.tensor(args.quantiles, device=torch_device)
-                loss = loss_func(preds, targets, quantiles_tensor) * target_weights * data_weights * masks
             else:
-                loss = loss_func(preds, targets) * target_weights * data_weights * masks
-
+                # updated_smiles_label is the daataset accuracy label
+                if args.smiles_label_values == 'None':
+                    loss = loss_func(preds, targets) * target_weights * data_weights * masks
+                else:
+                    loss = loss_func(preds, targets) * target_weights * data_weights * masks * torch.tensor(updated_smiles_label).unsqueeze(1)
 
             if args.loss_function == "mcc":
                 loss = loss.mean()

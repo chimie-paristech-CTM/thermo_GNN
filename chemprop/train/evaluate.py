@@ -18,7 +18,6 @@ def evaluate_predictions(preds: List[List[float]],
                          is_atom_bond_targets: bool = False,
                          gt_targets: List[List[bool]] = None,
                          lt_targets: List[List[bool]] = None,
-                         quantiles: List[float] = None,
                          logger: logging.Logger = None) -> Dict[str, List[float]]:
     """
     Evaluates predictions using a metric function after filtering out invalid targets.
@@ -31,7 +30,6 @@ def evaluate_predictions(preds: List[List[float]],
     :param is_atom_bond_targets: Boolean whether this is atomic/bond properties prediction.
     :param gt_targets: A list of lists of booleans indicating whether the target is an inequality rather than a single value.
     :param lt_targets: A list of lists of booleans indicating whether the target is an inequality rather than a single value.
-    :param quantiles: A list of quantiles for use in pinball evaluation of quantile_interval metric.
     :param logger: A logger to record output.
     :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
     """
@@ -41,7 +39,7 @@ def evaluate_predictions(preds: List[List[float]],
 
     if len(preds) == 0:
         return {metric: [float('nan')] * num_tasks for metric in metrics}
-    
+
     if is_atom_bond_targets:
         targets = [np.concatenate(x).reshape([-1, 1]) for x in zip(*targets)]
 
@@ -79,16 +77,8 @@ def evaluate_predictions(preds: List[List[float]],
             results[metric].append(metric_func(preds, targets))
     elif is_atom_bond_targets:
         for metric, metric_func in metric_to_func.items():
-            if metric == 'quantile':
-                if not quantiles:
-                    raise ValueError("quantile metric evaluation requires quantiles parameter")
-                for i, (valid_target, valid_pred) in enumerate(zip(valid_targets, valid_preds)):
-                    valid_target = np.concatenate(valid_target)
-                    valid_pred = np.concatenate(valid_pred)
-                    results[metric].append(metric_func(valid_target, valid_pred, quantiles[i]))
-            else:
-                for valid_target, valid_pred in zip(valid_targets, valid_preds):
-                    results[metric].append(metric_func(valid_target, valid_pred))
+            for valid_target, valid_pred in zip(valid_targets, valid_preds):
+                results[metric].append(metric_func(valid_target, valid_pred))
     else:
         for i in range(num_tasks):
             # # Skip if all targets or preds are identical, otherwise we'll crash during classification
@@ -112,13 +102,10 @@ def evaluate_predictions(preds: List[List[float]],
             for metric, metric_func in metric_to_func.items():
                 if dataset_type == 'multiclass' and metric == 'cross_entropy':
                     results[metric].append(metric_func(valid_targets[i], valid_preds[i],
-                                                    labels=list(range(len(valid_preds[i][0])))))
+                                                       labels=list(range(len(valid_preds[i][0])))))
                 elif metric in ['bounded_rmse', 'bounded_mse', 'bounded_mae']:
-                    results[metric].append(metric_func(valid_targets[i], valid_preds[i], valid_gt_targets[i], valid_lt_targets[i]))
-                elif metric == 'quantile':
-                    if not quantiles:
-                        raise ValueError("quantile metric evaluation requires quantiles parameter")
-                    results[metric].append(metric_func(valid_targets[i], valid_preds[i], quantiles[i]))
+                    results[metric].append(
+                        metric_func(valid_targets[i], valid_preds[i], valid_gt_targets[i], valid_lt_targets[i]))
                 else:
                     results[metric].append(metric_func(valid_targets[i], valid_preds[i]))
 
@@ -133,7 +120,6 @@ def evaluate(model: MoleculeModel,
              metrics: List[str],
              dataset_type: str,
              scaler: StandardScaler = None,
-             quantiles: List[float] = None,
              atom_bond_scaler: AtomBondScaler = None,
              logger: logging.Logger = None) -> Dict[str, List[float]]:
     """
@@ -145,7 +131,6 @@ def evaluate(model: MoleculeModel,
     :param metrics: A list of names of metric functions.
     :param dataset_type: Dataset type.
     :param scaler: A :class:`~chemprop.features.scaler.StandardScaler` object fit on the training targets.
-    :param quantiles: A list of quantiles for use in pinball evaluation of quantile_interval metric.
     :param atom_bond_scaler: A :class:`~chemprop.data.scaler.AtomBondScaler` fitted on the atomic/bond targets.
     :param logger: A logger to record output.
     :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
@@ -176,7 +161,6 @@ def evaluate(model: MoleculeModel,
         logger=logger,
         gt_targets=gt_targets,
         lt_targets=lt_targets,
-        quantiles=quantiles,
     )
 
     return results

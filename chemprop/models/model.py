@@ -5,11 +5,14 @@ from rdkit import Chem
 import torch
 import torch.nn as nn
 
-from .mpn import MPN
+from .mpn import MPN, Mlp_Trigonometric
 from .ffn import build_ffn, MultiReadout
 from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph
 from chemprop.nn_utils import initialize_weights
+
+
+
 
 
 class MoleculeModel(nn.Module):
@@ -21,9 +24,12 @@ class MoleculeModel(nn.Module):
         """
         super(MoleculeModel, self).__init__()
 
+        self.output_head = args.output_head
         self.classification = args.dataset_type == "classification"
         self.multiclass = args.dataset_type == "multiclass"
         self.loss_function = args.loss_function
+        self.aggregation = args.aggregation
+        self.aggregation_norm = args.aggregation_norm
 
         if hasattr(args, "train_class_sizes"):
             self.train_class_sizes = args.train_class_sizes
@@ -74,6 +80,11 @@ class MoleculeModel(nn.Module):
         self.create_ffn(args)
 
         initialize_weights(self)
+
+
+        self.wave_readout = Mlp_Trigonometric(1) #Mlp_Sin module to aggrate the atom_feature, bond_feature and molcule_feature
+
+        self.output_fingerprint = args.output_fingerprint
 
     def create_encoder(self, args: TrainArgs) -> None:
         """
@@ -136,7 +147,18 @@ class MoleculeModel(nn.Module):
                 shared_ffn=args.shared_atom_bond_ffn,
                 weights_ffn_num_layers=args.weights_ffn_num_layers,
             )
-        else:
+        elif self.output_head == 'FFN':
+            # self.mainbody = build_ffn(
+            #     first_linear_dim=atom_first_linear_dim,
+            #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+            #     num_layers=args.ffn_num_layers,
+            #     output_size=atom_first_linear_dim,
+            #     dropout=args.dropout,
+            #     activation=args.activation,
+            #     dataset_type=args.dataset_type,
+            #     spectra_activation=args.spectra_activation,
+            # )
+
             self.readout = build_ffn(
                 first_linear_dim=atom_first_linear_dim,
                 hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
@@ -148,51 +170,145 @@ class MoleculeModel(nn.Module):
                 spectra_activation=args.spectra_activation,
             )
 
+        # elif self.output_head == 'Transformer':
+        #     # self.mainbody = build_pyramid_transformer(
+        #     #     first_linear_dim=atom_first_linear_dim,
+        #     #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #     #     num_layers=args.ffn_num_layers,
+        #     #     output_size=atom_first_linear_dim,
+        #     #     dropout=args.dropout,
+        #     #     activation=args.activation,
+        #     #     dataset_type=args.dataset_type,
+        #     #     spectra_activation=args.spectra_activation,
+        #     # )
+        #     self.mainbody = build_transformer(
+        #         first_linear_dim=atom_first_linear_dim,
+        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #         num_layers=args.ffn_num_layers,
+        #         # num_heads=args.ffn_num_layers,
+        #         output_size=atom_first_linear_dim,
+        #         dropout=args.dropout,
+        #         activation=args.activation,
+        #         dataset_type=args.dataset_type,
+        #         spectra_activation=args.spectra_activation,
+        #     )
+        #     self.readout = build_transformer(
+        #         first_linear_dim=atom_first_linear_dim,
+        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #         num_layers=args.ffn_num_layers,
+        #         # num_heads=args.ffn_num_layers,
+        #         output_size=self.relative_output_size * args.num_tasks,
+        #         dropout=args.dropout,
+        #         activation=args.activation,
+        #         dataset_type=args.dataset_type,
+        #         spectra_activation=args.spectra_activation,
+        #     )
+        #
+        # elif self.output_head == 'Wave':
+        #     # self.mainbody = build_pyramid_transformer(
+        #     #     first_linear_dim=atom_first_linear_dim,
+        #     #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #     #     num_layers=args.ffn_num_layers,
+        #     #     output_size=atom_first_linear_dim,
+        #     #     dropout=args.dropout,
+        #     #     activation=args.activation,
+        #     #     dataset_type=args.dataset_type,
+        #     #     spectra_activation=args.spectra_activation,
+        #     # )
+        #     self.mainbody = build_wave(
+        #         first_linear_dim=atom_first_linear_dim,
+        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #         num_layers=args.ffn_num_layers,
+        #         # num_heads=args.ffn_num_layers,
+        #         output_size=atom_first_linear_dim,
+        #         dropout=args.dropout,
+        #         activation=args.activation,
+        #         dataset_type=args.dataset_type,
+        #         spectra_activation=args.spectra_activation,
+        #     )
+        #     self.readout = build_wave(
+        #         first_linear_dim=atom_first_linear_dim,
+        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
+        #         num_layers=args.ffn_num_layers,
+        #         # num_heads=args.ffn_num_layers,
+        #         output_size=self.relative_output_size * args.num_tasks,
+        #         dropout=args.dropout,
+        #         activation=args.activation,
+        #         dataset_type=args.dataset_type,
+        #         spectra_activation=args.spectra_activation,
+        #     )
+
+        # elif self.output_head == 'Retnet':
+        #     # self.readout = RetNet(
+        #     #     layers=3,
+        #     #     hidden_dim=300,
+        #     #     ffn_size=2048,
+        #     #     heads=5,
+        #     #     double_v_dim=True
+        #     # )
+        #     pass
+        else:
+            raise ValueError(f"Invalid argument Unkonwn type{self.model}")
+
         if args.checkpoint_frzn is not None:
             if args.frzn_ffn_layers > 0:
                 if self.is_atom_bond_targets:
                     if args.shared_atom_bond_ffn:
                         for param in list(self.readout.atom_ffn_base.parameters())[
-                            0 : 2 * args.frzn_ffn_layers
-                        ]:
+                                     0: 2 * args.frzn_ffn_layers
+                                     ]:
                             param.requires_grad = False
                         for param in list(self.readout.bond_ffn_base.parameters())[
-                            0 : 2 * args.frzn_ffn_layers
-                        ]:
+                                     0: 2 * args.frzn_ffn_layers
+                                     ]:
                             param.requires_grad = False
                     else:
                         for ffn in self.readout.ffn_list:
                             if ffn.constraint:
                                 for param in list(ffn.ffn.parameters())[
-                                    0 : 2 * args.frzn_ffn_layers
-                                ]:
+                                             0: 2 * args.frzn_ffn_layers
+                                             ]:
                                     param.requires_grad = False
                             else:
                                 for param in list(ffn.ffn_readout.parameters())[
-                                    0 : 2 * args.frzn_ffn_layers
-                                ]:
+                                             0: 2 * args.frzn_ffn_layers
+                                             ]:
                                     param.requires_grad = False
                 else:
                     for param in list(self.readout.parameters())[
-                        0 : 2 * args.frzn_ffn_layers
-                    ]:  # Freeze weights and bias for given number of layers
+                                 0: 2 * args.frzn_ffn_layers
+                                 ]:  # Freeze weights and bias for given number of layers
                         param.requires_grad = False
 
+    def featurize(self,
+                  batch: Union[List[str], List[Chem.Mol], BatchMolGraph],
+                  features_batch: List[np.ndarray] = None,
+                  mol_adj_batch: List[np.ndarray] = None,
+                  mol_dist_batch: List[np.ndarray] = None,
+                  mol_clb_batch: List[np.ndarray] = None) -> torch.FloatTensor:
+        """
+        Computes feature vectors of the input by running the model except for the last layer. (MPNEncoder + FFN[:-1])
+        return: The feature vectors computed by the :class:`MoleculeModel`.
+        """
+        return self.ffn[:-1](self.encoder(batch, features_batch, mol_adj_batch, mol_dist_batch, mol_clb_batch))
+
     def fingerprint(
-        self,
-        batch: Union[
-            List[List[str]],
-            List[List[Chem.Mol]],
-            List[List[Tuple[Chem.Mol, Chem.Mol]]],
-            List[BatchMolGraph],
-        ],
-        features_batch: List[np.ndarray] = None,
-        atom_descriptors_batch: List[np.ndarray] = None,
-        atom_features_batch: List[np.ndarray] = None,
-        bond_descriptors_batch: List[np.ndarray] = None,
-        bond_features_batch: List[np.ndarray] = None,
-        fingerprint_type: str = "MPN",
-    ) -> torch.Tensor:
+            self,
+            batch: Union[
+                List[List[str]],
+                List[List[Chem.Mol]],
+                List[List[Tuple[Chem.Mol, Chem.Mol]]],
+                List[BatchMolGraph],
+            ],
+            features_batch: List[np.ndarray] = None,
+            atom_descriptors_batch: List[np.ndarray] = None,
+            atom_features_batch: List[np.ndarray] = None,
+            bond_descriptors_batch: List[np.ndarray] = None,
+            bond_features_batch: List[np.ndarray] = None,
+            fingerprint_type: str = "MPN",
+            mol_adj_batch: List[np.ndarray] = None,
+            mol_dist_batch: List[np.ndarray] = None,
+            mol_clb_batch: List[np.ndarray] = None) -> torch.Tensor:
         """
         Encodes the latent representations of the input molecules from intermediate stages of the model.
 
@@ -217,6 +333,9 @@ class MoleculeModel(nn.Module):
                 atom_features_batch,
                 bond_descriptors_batch,
                 bond_features_batch,
+                mol_adj_batch,
+                mol_dist_batch,
+                mol_clb_batch,
             )
         elif fingerprint_type == "last_FFN":
             return self.readout[:-1](
@@ -227,26 +346,30 @@ class MoleculeModel(nn.Module):
                     atom_features_batch,
                     bond_descriptors_batch,
                     bond_features_batch,
+                    mol_adj_batch,
+                    mol_dist_batch,
+                    mol_clb_batch,
+
                 )
             )
         else:
             raise ValueError(f"Unsupported fingerprint type {fingerprint_type}.")
 
     def forward(
-        self,
-        batch: Union[
-            List[List[str]],
-            List[List[Chem.Mol]],
-            List[List[Tuple[Chem.Mol, Chem.Mol]]],
-            List[BatchMolGraph],
-        ],
-        features_batch: List[np.ndarray] = None,
-        atom_descriptors_batch: List[np.ndarray] = None,
-        atom_features_batch: List[np.ndarray] = None,
-        bond_descriptors_batch: List[np.ndarray] = None,
-        bond_features_batch: List[np.ndarray] = None,
-        constraints_batch: List[torch.Tensor] = None,
-        bond_types_batch: List[torch.Tensor] = None,
+            self,
+            batch: Union[
+                List[List[str]],
+                List[List[Chem.Mol]],
+                List[List[Tuple[Chem.Mol, Chem.Mol]]],
+                List[BatchMolGraph],
+            ],
+            features_batch: List[np.ndarray] = None,
+            atom_descriptors_batch: List[np.ndarray] = None,
+            atom_features_batch: List[np.ndarray] = None,
+            bond_descriptors_batch: List[np.ndarray] = None,
+            bond_features_batch: List[np.ndarray] = None,
+            constraints_batch: List[torch.Tensor] = None,
+            bond_types_batch: List[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Runs the :class:`MoleculeModel` on input.
@@ -264,32 +387,118 @@ class MoleculeModel(nn.Module):
         :param bond_types_batch: A list of PyTorch tensors storing bond types of each bond determined by RDKit molecules.
         :return: The output of the :class:`MoleculeModel`, containing a list of property predictions.
         """
-        if self.is_atom_bond_targets:
-            encodings = self.encoder(
-                batch,
-                features_batch,
-                atom_descriptors_batch,
-                atom_features_batch,
-                bond_descriptors_batch,
-                bond_features_batch,
-            )
-            output = self.readout(encodings, constraints_batch, bond_types_batch)
-        else:
-            encodings = self.encoder(
-                batch,
-                features_batch,
-                atom_descriptors_batch,
-                atom_features_batch,
-                bond_descriptors_batch,
-                bond_features_batch,
-            )
-            output = self.readout(encodings)
 
+        if self.output_fingerprint == "atom":
+            if self.is_atom_bond_targets:
+                encodings = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output = self.readout(encodings, constraints_batch, bond_types_batch)
+            else:
+                encodings, a_scope = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output = self.readout(encodings)
+
+            atom_vecs = []
+            for i, (a_start, a_size) in enumerate(a_scope):
+                if a_size == 0:
+                    # mol_vecs.append(self.cached_zero_vector)
+                    pass
+                else:
+                    cur_hiddens = output.narrow(0, a_start, a_size)
+                    atom_vec = cur_hiddens  # (num_atoms, hidden_size)
+                    if self.aggregation == 'mean':
+                        atom_vec = atom_vec.sum(dim=0) / a_size # atom_vec.shape: 1
+                    elif self.aggregation == 'sum':
+                        atom_vec = atom_vec.sum(dim=0)
+                    elif self.aggregation == 'norm':
+                        atom_vec = atom_vec.sum(dim=0) / self.aggregation_norm
+
+                    atom_vecs.append(atom_vec)
+            output_atom = atom_vecs
+            output_atom = torch.cat(output_atom, dim=0) # batch_Size
+            output = torch.unsqueeze(output_atom, dim=1)  # output shape: batch_size * 1
+
+
+        elif self.output_fingerprint == "mol":
+            if self.is_atom_bond_targets:
+                encodings = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output = self.readout(encodings, constraints_batch, bond_types_batch)
+            else:
+                encodings, a_scope = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output = self.readout(encodings)
+
+        elif self.output_fingerprint == "hyper":
+            if self.is_atom_bond_targets:
+                encodings = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output = self.readout(encodings, constraints_batch, bond_types_batch)
+            else:
+                encodings_mol, encodings_atom, a_scope = self.encoder(
+                    batch,
+                    features_batch,
+                    atom_descriptors_batch,
+                    atom_features_batch,
+                    bond_descriptors_batch,
+                    bond_features_batch,
+                )
+                output_mol = self.readout(encodings_mol)
+                output_atom = self.readout(encodings_atom)
+                atom_vecs = []
+                for i, (a_start, a_size) in enumerate(a_scope):
+                    if a_size == 0:
+                        # mol_vecs.append(self.cached_zero_vector)
+                        pass
+                    else:
+                        cur_hiddens = output_atom.narrow(0, a_start, a_size)
+                        atom_vec = cur_hiddens  # (num_atoms, hidden_size)
+                        atom_vec = atom_vec.sum(dim=0)
+                        atom_vecs.append(atom_vec)
+                outputs_atom = atom_vecs
+                outputs_atom = torch.cat(outputs_atom, dim=0)
+                outputs_atom = torch.unsqueeze(outputs_atom, dim=1)
+
+                # hyper
+                output = torch.add(outputs_atom, output_mol)
+
+        else:
+            raise ValueError(f"Unsupported fingerprint parameter {self.output_fingerprint}.")
         # Don't apply sigmoid during training when using BCEWithLogitsLoss
         if (
-            self.classification
-            and not (self.training and self.no_training_normalization)
-            and self.loss_function != "dirichlet"
+                self.classification
+                and not (self.training and self.no_training_normalization)
+                and self.loss_function != "dirichlet"
         ):
             if self.is_atom_bond_targets:
                 output = [self.sigmoid(x) for x in output]
@@ -300,8 +509,8 @@ class MoleculeModel(nn.Module):
                 (output.shape[0], -1, self.num_classes)
             )  # batch size x num targets x num classes per target
             if (
-                not (self.training and self.no_training_normalization)
-                and self.loss_function != "dirichlet"
+                    not (self.training and self.no_training_normalization)
+                    and self.loss_function != "dirichlet"
             ):
                 output = self.multiclass_softmax(
                     output
@@ -329,7 +538,7 @@ class MoleculeModel(nn.Module):
                     )
                     lambdas = self.softplus(lambdas)  # + min_val
                     alphas = (
-                        self.softplus(alphas) + 1
+                            self.softplus(alphas) + 1
                     )  # + min_val # add 1 for numerical contraints of Gamma function
                     betas = self.softplus(betas)  # + min_val
                     outputs.append(torch.cat([means, lambdas, alphas, betas], dim=1))
@@ -340,7 +549,7 @@ class MoleculeModel(nn.Module):
                 )
                 lambdas = self.softplus(lambdas)  # + min_val
                 alphas = (
-                    self.softplus(alphas) + 1
+                        self.softplus(alphas) + 1
                 )  # + min_val # add 1 for numerical contraints of Gamma function
                 betas = self.softplus(betas)  # + min_val
                 output = torch.cat([means, lambdas, alphas, betas], dim=1)

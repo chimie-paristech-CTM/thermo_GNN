@@ -13,9 +13,11 @@ import pandas as pd
 from .run_training import run_training
 from chemprop.args import TrainArgs
 from chemprop.constants import TEST_SCORES_FILE_NAME, TRAIN_LOGGER_NAME
-from chemprop.data import get_data, get_task_names, MoleculeDataset, validate_dataset_type
+from chemprop.data import get_data, get_multidata, get_data_multisingle, get_task_names, MoleculeDataset, \
+    validate_dataset_type
 from chemprop.utils import create_logger, makedirs, timeit, multitask_mean
-from chemprop.features import set_extra_atom_fdim, set_extra_bond_fdim, set_explicit_h, set_adding_hs, set_keeping_atom_map, set_reaction, reset_featurization_parameters
+from chemprop.features import set_extra_atom_fdim, set_extra_bond_fdim, set_explicit_h, set_adding_hs, \
+    set_keeping_atom_map, set_reaction, reset_featurization_parameters
 
 
 @timeit(logger_name=TRAIN_LOGGER_NAME)
@@ -42,17 +44,8 @@ def cross_validate(args: TrainArgs,
     # Initialize relevant variables
     init_seed = args.seed
     save_dir = args.save_dir
-    args.task_names = get_task_names(
-        path=args.data_path,
-        smiles_columns=args.smiles_columns,
-        target_columns=args.target_columns,
-        ignore_columns=args.ignore_columns,
-        loss_function=args.loss_function,
-    )
-
-    args.quantiles = [args.quantile_loss_alpha / 2] * (args.num_tasks // 2) + [1 - args.quantile_loss_alpha / 2] * (
-        args.num_tasks // 2
-    )
+    args.task_names = get_task_names(path=args.data_path, smiles_columns=args.smiles_columns,
+                                     target_columns=args.target_columns, ignore_columns=args.ignore_columns)
 
     # Print command line
     debug('Command line')
@@ -79,16 +72,35 @@ def cross_validate(args: TrainArgs,
         set_reaction(args.reaction, args.reaction_mode)
     elif args.reaction_solvent:
         set_reaction(True, args.reaction_mode)
-    
+
     # Get data
     debug('Loading data')
-    data = get_data(
-        path=args.data_path,
-        args=args,
-        logger=logger,
-        skip_none_targets=True,
-        data_weights_path=args.data_weights_path
-    )
+    if args.multidata is None:
+        data = get_data(
+            path=args.data_path,
+            args=args,
+            logger=logger,
+            skip_none_targets=True,
+            data_weights_path=args.data_weights_path
+        )
+    elif args.multidata == 'multi':
+        data = get_multidata(
+            path=args.data_path,
+            args=args,
+            logger=logger,
+            skip_none_targets=True,
+            data_weights_path=args.data_weights_path
+        )
+    elif args.multidata == 'multi_single_input':
+        data = get_data_multisingle(
+            path=args.data_path,
+            args=args,
+            logger=logger,
+            skip_none_targets=True,
+            data_weights_path=args.data_weights_path
+        )
+    else:
+        raise ValueError('Invalid multidata value')
     validate_dataset_type(data, dataset_type=args.dataset_type)
     args.features_size = data.features_size()
 
@@ -106,7 +118,8 @@ def cross_validate(args: TrainArgs,
     debug(f'Number of tasks = {args.num_tasks}')
 
     if args.target_weights is not None and len(args.target_weights) != args.num_tasks:
-        raise ValueError('The number of provided target weights must match the number and order of the prediction tasks')
+        raise ValueError(
+            'The number of provided target weights must match the number and order of the prediction tasks')
 
     # Run training on different random seeds for each fold
     all_scores = defaultdict(list)
@@ -146,15 +159,7 @@ def cross_validate(args: TrainArgs,
                  f'{multitask_mean(scores=scores[fold_num], metric=metric, ignore_nan_metrics=args.ignore_nan_metrics):.6f}')
 
             if args.show_individual_scores:
-                if args.loss_function == "quantile_interval" and metric == "quantile":
-                    num_tasks = len(args.task_names) // 2
-                    task_names = args.task_names[:num_tasks]
-                    task_names = [f"{task_name} lower" for task_name in task_names] + [
-                                  f"{task_name} upper" for task_name in task_names]
-                else:
-                    task_names = args.task_names
-
-                for task_name, score in zip(task_names, scores[fold_num]):
+                for task_name, score in zip(args.task_names, scores[fold_num]):
                     info(f'\t\tSeed {init_seed + fold_num} ==> test {task_name} {metric} = {score:.6f}')
                     if np.isnan(score):
                         contains_nan_scores = True
@@ -171,7 +176,7 @@ def cross_validate(args: TrainArgs,
         info(f'Overall test {metric} = {mean_score:.6f} +/- {std_score:.6f}')
 
         if args.show_individual_scores:
-            for task_num, task_name in enumerate(task_names):
+            for task_num, task_name in enumerate(args.task_names):
                 info(f'\tOverall test {task_name} {metric} = '
                      f'{np.mean(scores[:, task_num]):.6f} +/- {np.std(scores[:, task_num]):.6f}')
 
@@ -194,23 +199,15 @@ def cross_validate(args: TrainArgs,
                       [f'Fold {i} {metric}' for i in range(args.num_folds)]
         writer.writerow(header)
 
-        if args.dataset_type == 'spectra': # spectra data type has only one score to report
+        if args.dataset_type == 'spectra':  # spectra data type has only one score to report
             row = ['spectra']
             for metric, scores in all_scores.items():
-                task_scores = scores[:,0]
+                task_scores = scores[:, 0]
                 mean, std = np.mean(task_scores), np.std(task_scores)
                 row += [mean, std] + task_scores.tolist()
             writer.writerow(row)
-        else: # all other data types, separate scores by task
-            if args.loss_function == "quantile_interval" and metric == "quantile":
-                num_tasks = len(args.task_names) // 2
-                task_names = args.task_names[:num_tasks]
-                task_names = [f"{task_name} (lower quantile)" for task_name in task_names] + [
-                                f"{task_name} (upper quantile)" for task_name in task_names]
-            else:
-                task_names = args.task_names
-
-            for task_num, task_name in enumerate(task_names):
+        else:  # all other data types, separate scores by task
+            for task_num, task_name in enumerate(args.task_names):
                 row = [task_name]
                 for metric, scores in all_scores.items():
                     task_scores = scores[:, task_num]
@@ -229,7 +226,7 @@ def cross_validate(args: TrainArgs,
     # Optionally merge and save test preds
     if args.save_preds:
         all_preds = pd.concat([pd.read_csv(os.path.join(save_dir, f'fold_{fold_num}', 'test_preds.csv'))
-                                  for fold_num in range(args.num_folds)])
+                               for fold_num in range(args.num_folds)])
         all_preds.to_csv(os.path.join(save_dir, 'test_preds.csv'), index=False)
 
     return mean_score, std_score

@@ -494,9 +494,14 @@ def build_optimizer(model: nn.Module, args: TrainArgs) -> Optimizer:
     :param args: A :class:`~chemprop.args.TrainArgs` object containing optimizer arguments.
     :return: An initialized Optimizer.
     """
-    params = [{"params": model.parameters(), "lr": args.init_lr, "weight_decay": 0}]
-
-    return Adam(params)
+    if args.optimizer == 'adam':
+        params = [{"params": model.parameters(), "lr": args.init_lr, "weight_decay": 0}]
+        return Adam(params)
+    elif args.optimizer == 'core':
+        params = [{"params": model.parameters(), "lr": args.init_lr, "step_sizes":(1e-6, 1e-2)}]
+        return CoRe(params)
+    else:
+        raise ValueError("this is a wrong value in optimzer ")
 
 
 def build_lr_scheduler(
@@ -608,9 +613,8 @@ def save_smiles_splits(
     train_data: MoleculeDataset = None,
     val_data: MoleculeDataset = None,
     test_data: MoleculeDataset = None,
-    smiles_columns: List[str] = None,
-    loss_function: str = None,
     logger: logging.Logger = None,
+    smiles_columns: List[str] = None,
 ) -> None:
     """
     Saves a csv file with train/val/test splits of target data and additional features.
@@ -627,7 +631,6 @@ def save_smiles_splits(
     :param val_data: Validation :class:`~chemprop.data.data.MoleculeDataset`.
     :param test_data: Test :class:`~chemprop.data.data.MoleculeDataset`.
     :param smiles_columns: The name of the column containing SMILES. By default, uses the first column.
-    :param loss_function: The loss function to be used in training.
     :param logger: A logger for recording output.
     """
     makedirs(save_dir)
@@ -654,15 +657,7 @@ def save_smiles_splits(
             indices_by_smiles[smiles] = i
 
     if task_names is None:
-        task_names = get_task_names(
-            path=data_path,
-            smiles_columns=smiles_columns,
-            loss_function=loss_function,
-            )
-
-    if loss_function == "quantile_interval":
-        num_tasks = len(task_names) // 2
-        task_names = task_names[:num_tasks]
+        task_names = get_task_names(path=data_path, smiles_columns=smiles_columns)
 
     features_header = []
     if features_path is not None:
@@ -699,8 +694,6 @@ def save_smiles_splits(
             dataset_targets = dataset.targets()
             for i, smiles in enumerate(dataset.smiles()):
                 targets = [x.tolist() if isinstance(x, np.ndarray) else x for x in dataset_targets[i]]
-                # correct the number of targets when running quantile regression
-                targets = targets[:len(task_names)]
                 writer.writerow(smiles + targets)
 
         if features_path is not None:
@@ -869,7 +862,7 @@ def multitask_mean(
     :param ignore_nan_metrics: Ignore invalid task metrics (NaNs) when computing average metrics across tasks.
     :return: The combined score across the tasks.
     """
-    scale_dependent_metrics = ["rmse", "mae", "mse", "bounded_rmse", "bounded_mae", "bounded_mse", "quantile"]
+    scale_dependent_metrics = ["rmse", "mae", "mse", "bounded_rmse", "bounded_mae", "bounded_mse"]
     nonscale_dependent_metrics = [
         "auc", "prc-auc", "r2", "accuracy", "cross_entropy",
         "binary_cross_entropy", "sid", "wasserstein", "f1", "mcc", "recall", "precision", "balanced_accuracy", "confusion_matrix"

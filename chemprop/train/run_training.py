@@ -25,7 +25,17 @@ from chemprop.nn_utils import param_count, param_count_all
 from chemprop.utils import build_optimizer, build_lr_scheduler, load_checkpoint, makedirs, \
     save_checkpoint, save_smiles_splits, load_frzn_model, multitask_mean
 
+def calculate_rmse(targets, predictions):
+    targets = np.array(targets)
+    predictions = np.array(predictions)
+    rmse = np.sqrt(np.mean((targets - predictions) ** 2))
+    return rmse
 
+def calculate_mae(targets, predictions):
+    targets = np.array(targets)
+    predictions = np.array(predictions)
+    mae = np.mean(np.abs(targets - predictions))
+    return mae
 def run_training(args: TrainArgs,
                  data: MoleculeDataset,
                  logger: Logger = None) -> Dict[str, List[float]]:
@@ -37,8 +47,8 @@ def run_training(args: TrainArgs,
     :param data: A :class:`~chemprop.data.MoleculeDataset` containing the data.
     :param logger: A logger to record output.
     :return: A dictionary mapping each metric in :code:`args.metrics` to a list of values for each task.
-
     """
+
     if logger is not None:
         debug, info = logger.debug, logger.info
     else:
@@ -122,7 +132,6 @@ def run_training(args: TrainArgs,
             val_data=val_data,
             test_data=test_data,
             smiles_columns=args.smiles_columns,
-            loss_function=args.loss_function,
             logger=logger,
         )
 
@@ -197,7 +206,6 @@ def run_training(args: TrainArgs,
 
     # Get loss function
     loss_func = get_loss_func(args)
-
     # Set up test set evaluation
     test_smiles, test_targets = test_data.smiles(), test_data.targets()
     if args.dataset_type == 'multiclass':
@@ -314,7 +322,6 @@ def run_training(args: TrainArgs,
                 metrics=args.metrics,
                 dataset_type=args.dataset_type,
                 scaler=scaler,
-                quantiles=args.quantiles,
                 atom_bond_scaler=atom_bond_scaler,
                 logger=logger
             )
@@ -330,15 +337,8 @@ def run_training(args: TrainArgs,
                 writer.add_scalar(f'validation_{metric}', mean_val_score, n_iter)
 
                 if args.show_individual_scores:
-                    if args.loss_function == "quantile_interval" and metric == "quantile":
-                        num_tasks = len(args.task_names) // 2
-                        task_names = args.task_names[:num_tasks]
-                        task_names = [f"{task_name} lower" for task_name in task_names] + [
-                                        f"{task_name} upper" for task_name in task_names]
-                    else:
-                        task_names = args.task_names
                     # Individual validation scores
-                    for task_name, val_score in zip(task_names, scores):
+                    for task_name, val_score in zip(args.task_names, scores):
                         debug(f'Validation {task_name} {metric} = {val_score:.6f}')
                         writer.add_scalar(f'validation_{task_name}_{metric}', val_score, n_iter)
 
@@ -376,7 +376,6 @@ def run_training(args: TrainArgs,
                 is_atom_bond_targets=args.is_atom_bond_targets,
                 gt_targets=test_data.gt_targets(),
                 lt_targets=test_data.lt_targets(),
-                quantiles=args.quantiles,
                 logger=logger
             )
 
@@ -387,14 +386,19 @@ def run_training(args: TrainArgs,
                     sum_test_preds += np.array(test_preds)
 
             # Average test score
+            rmse = calculate_rmse(test_targets, test_preds)
+            mae = calculate_mae(test_targets, test_preds)
+
+            # print("RMSE:", rmse)
+            # print("MAE:", mae)
             for metric, scores in test_scores.items():
                 avg_test_score = np.nanmean(scores)
-                info(f'Model {model_idx} test {metric} = {avg_test_score:.6f}')
+                info(f'Model {model_idx} test {metric} = {avg_test_score:.6f} ||test mae: ---{mae} = {mae:.6f}')
                 writer.add_scalar(f'test_{metric}', avg_test_score, 0)
 
                 if args.show_individual_scores and args.dataset_type != 'spectra':
                     # Individual test scores
-                    for task_name, test_score in zip(task_names, scores):
+                    for task_name, test_score in zip(args.task_names, scores):
                         info(f'Model {model_idx} test {task_name} {metric} = {test_score:.6f}')
                         writer.add_scalar(f'test_{task_name}_{metric}', test_score, n_iter)
         writer.close()
@@ -416,8 +420,7 @@ def run_training(args: TrainArgs,
             is_atom_bond_targets=args.is_atom_bond_targets,
             gt_targets=test_data.gt_targets(),
             lt_targets=test_data.lt_targets(),
-            quantiles=args.quantiles,
-            logger=logger,
+            logger=logger
         )
 
     for metric, scores in ensemble_scores.items():
@@ -431,7 +434,7 @@ def run_training(args: TrainArgs,
 
         # Individual ensemble scores
         if args.show_individual_scores:
-            for task_name, ensemble_score in zip(task_names, scores):
+            for task_name, ensemble_score in zip(args.task_names, scores):
                 info(f'Ensemble test {task_name} {metric} = {ensemble_score:.6f}')
 
     # Save scores
@@ -454,22 +457,8 @@ def run_training(args: TrainArgs,
                 values = [list(v) for v in values]
                 test_preds_dataframe[bond_target] = values
         else:
-            if args.loss_function == "quantile_interval" and metric == "quantile":
-                num_tasks = len(args.task_names) // 2
-                task_names = args.task_names[:num_tasks]
-                avg_test_preds = np.array(avg_test_preds)
-                num_data = avg_test_preds.shape[0]
-                preds = avg_test_preds.reshape(num_data, 2, num_tasks).mean(axis=1)
-                intervals = abs(np.diff(avg_test_preds.reshape(num_data, 2, num_tasks), axis=1) / 2)
-                intervals = intervals.reshape(num_data, num_tasks)
-                for i, task_name in enumerate(task_names):
-                    test_preds_dataframe[task_name] = [pred[i] for pred in preds]
-                for i, task_name in enumerate(task_names):
-                    task_name = f"{task_name}_{args.quantile_loss_alpha}_half_interval"
-                    test_preds_dataframe[task_name] = [interval[i] for interval in intervals]
-            else:
-                for i, task_name in enumerate(args.task_names):
-                    test_preds_dataframe[task_name] = [pred[i] for pred in avg_test_preds]
+            for i, task_name in enumerate(args.task_names):
+                test_preds_dataframe[task_name] = [pred[i] for pred in avg_test_preds]
 
         test_preds_dataframe.to_csv(os.path.join(args.save_dir, 'test_preds.csv'), index=False)
 

@@ -2,6 +2,7 @@ from typing import List, Tuple, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from chemprop.nn_utils import get_activation_function
 
@@ -72,7 +73,7 @@ class MultiReadout(nn.Module):
             "num_layers": num_layers,
             "output_size": output_size,
             "dropout": dropout,
-            "activation": activation,  
+            "activation": activation,
             "ffn_base": self.atom_ffn_base,
             "ffn_type": "atom",
         }
@@ -83,7 +84,7 @@ class MultiReadout(nn.Module):
             "num_layers": num_layers,
             "output_size": output_size,
             "dropout": dropout,
-            "activation": activation,  
+            "activation": activation,
             "ffn_base": self.bond_ffn_base,
             "ffn_type": "bond",
         }
@@ -419,6 +420,214 @@ def build_ffn(
         ])
 
     # If spectra model, also include spectra activation
+    if dataset_type == "spectra":
+        spectra_activation = nn.Softplus() if spectra_activation == "softplus" else Exp()
+        layers.append(spectra_activation)
+
+    return nn.Sequential(*layers)
+class PositionwiseFeedForward(nn.Module):
+    def __init__(self, d_model, d_ff, activation='LeakyReLU', dropout=0.1):
+        super(PositionwiseFeedForward, self).__init__()
+        self.w_1 = nn.Linear(d_model, d_ff)
+        self.w_2 = nn.Linear(d_ff, d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        return self.w_2(self.dropout(self.activation(self.w_1(x))))
+
+class MultiheadAttention(nn.Module):
+    def __init__(self, d_model, dropout=0.1):
+        super(MultiheadAttention, self).__init__()
+        self.d_model = d_model
+        self.head_dim = d_model  # 使用一个固定值来代替num_heads
+        self.W_q = nn.Linear(d_model, d_model)
+        self.W_k = nn.Linear(d_model, d_model)
+        self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def scaled_dot_product_attention(self, q, k, v, mask=None):
+        matmul_qk = torch.matmul(q, k.transpose(-2, -1))
+        d_k = k.size(-1)
+        scaled_attention_logits = matmul_qk / torch.sqrt(torch.tensor(self.head_dim, dtype=matmul_qk.dtype))
+
+        if mask is not None:
+            scaled_attention_logits += (mask * -1e9)
+
+        attention_weights = F.softmax(scaled_attention_logits, dim=-1)
+        output = torch.matmul(attention_weights, v)
+        return output, attention_weights
+
+    def forward(self, query, key, value, mask=None):
+        batch_size = query.size(0)
+
+        # Linear transformation for query, key, and value
+        q = self.W_q(query)
+        k = self.W_k(key)
+        v = self.W_v(value)
+
+        # Apply scaled dot-product attention
+        output, attention_weights = self.scaled_dot_product_attention(q, k, v, mask)
+
+        # Linear transformation for the output
+        output = self.W_o(output)
+        output = self.dropout(output)
+
+        return output, attention_weights
+
+class WaveMLPAttention(nn.Module):
+    def __init__(self, d_model, num_channels=16, kernel_size=3, activation='LeakyReLU', dropout=0.1):
+        super(WaveMLPAttention, self).__init__()
+        self.linear1 = nn.Linear(d_model, num_channels)
+        self.linear2 = nn.Linear(num_channels, d_model)
+        self.dropout = nn.Dropout(dropout)
+        if activation == 'LeakyReLU':
+            self.activation = nn.LeakyReLU()
+        else:
+            self.activation = nn.ReLU()
+
+    def forward(self, x):
+        residual = x  # Save the input for residual connection
+        x = self.linear1(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+        x = self.linear2(x)
+        x = self.dropout(x)
+        return x + residual  # Apply residual connection
+
+
+class WaveBlock(nn.Module):
+    def __init__(self, d_model, dropout, activation):
+        super().__init__()
+        num_channels = 16
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.attention = WaveMLPAttention(d_model, num_channels=num_channels, activation=activation, dropout=dropout)
+        self.ffn = PositionwiseFeedForward(d_model, 4 * d_model, activation, dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, mask=None):
+        x_norm = self.norm1(x)
+        attention_output = self.attention(x_norm)
+        x = x + self.dropout(attention_output)
+        x_norm = self.norm2(x)
+        ff_output = self.ffn(x_norm)
+        output = x + self.dropout(ff_output)
+        return output
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model, dropout, activation):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.ffn = PositionwiseFeedForward(d_model, 4 * d_model, activation, dropout)
+        self.dropout = nn.Dropout(dropout)
+        self.attention = MultiheadAttention(d_model, dropout)
+
+    def forward(self, x, mask=None):
+        x_norm = self.norm1(x)
+        attention_output, _ = self.attention(x_norm, x_norm, x_norm, mask)
+        x = x + self.dropout(attention_output)
+        x_norm = self.norm2(x)
+        ff_output = self.ffn(x_norm)
+        output = x + self.dropout(ff_output)
+        return output
+def build_transformer(
+        first_linear_dim: int,
+        hidden_size: int,
+        num_layers: int,
+        output_size: int,
+        dropout: float,
+        activation: str,
+        dataset_type: str = None,
+        spectra_activation: str = None,
+) -> nn.Sequential:
+    layers = [
+        nn.Linear(first_linear_dim, hidden_size),
+        TransformerBlock(hidden_size, dropout, activation)
+    ]
+
+    for _ in range(num_layers - 1):
+        layers.append(TransformerBlock(hidden_size, dropout, activation))
+
+    layers.append(nn.Linear(hidden_size, output_size))
+
+    if dataset_type == "spectra":
+        spectra_activation = nn.Softplus() if spectra_activation == "softplus" else Exp()
+        layers.append(spectra_activation)
+
+    return nn.Sequential(*layers)
+
+def build_wave(
+        first_linear_dim: int,
+        hidden_size: int,
+        num_layers: int,
+        output_size: int,
+        dropout: float,
+        activation: str,
+        dataset_type: str = None,
+        spectra_activation: str = None,
+) -> nn.Sequential:
+    layers = [
+        nn.Linear(first_linear_dim, hidden_size),
+        WaveBlock(hidden_size, dropout, activation)
+    ]
+
+    for _ in range(num_layers - 1):
+        layers.append(WaveBlock(hidden_size, dropout, activation))
+
+    layers.append(nn.Linear(hidden_size, output_size))
+
+    if dataset_type == "spectra":
+        spectra_activation = nn.Softplus() if spectra_activation == "softplus" else Exp()
+        layers.append(spectra_activation)
+
+    return nn.Sequential(*layers)
+class MergeLayer(nn.Module):
+    def __init__(self, output_dim):
+        super(MergeLayer, self).__init__()
+        self.output_dim = output_dim
+
+    def forward(self, xs):
+        return sum([F.interpolate(x.unsqueeze(0), size=self.output_dim).squeeze(0) for x in xs])
+
+class FeaturePyramidTransformer(nn.Module):
+    def __init__(self, d_model, num_layers, d_ff, dropout=0.1, activation='relu'):
+        super(FeaturePyramidTransformer, self).__init__()
+        self.layers = nn.ModuleList()
+        self.transforms = nn.ModuleList()
+        for _ in range(num_layers):
+            self.layers.append(TransformerBlock(d_model, dropout, activation))
+            self.transforms.append(nn.Linear(d_model, d_model // 2))
+            d_model = d_model // 2
+            d_ff = d_ff // 2
+
+    def forward(self, x):
+        outputs = []
+        for layer, transform in zip(self.layers, self.transforms):
+            x = layer(x)
+            outputs.append(x)
+            x = transform(x)
+        outputs.append(x)
+        return outputs
+
+def build_pyramid_transformer(
+        first_linear_dim: int,
+        hidden_size: int,
+        num_layers: int,
+        output_size: int,
+        dropout: float,
+        activation: str,
+        dataset_type: str = None,
+        spectra_activation: str = None,
+) -> nn.Sequential:
+    layers = [
+        nn.Linear(first_linear_dim, hidden_size),
+        FeaturePyramidTransformer(hidden_size, num_layers, 4 * hidden_size, dropout, activation),
+        MergeLayer(hidden_size),
+        nn.Linear(hidden_size, output_size)
+    ]
+
     if dataset_type == "spectra":
         spectra_activation = nn.Softplus() if spectra_activation == "softplus" else Exp()
         layers.append(spectra_activation)

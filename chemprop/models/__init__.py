@@ -1,5 +1,5 @@
 from .model import MoleculeModel
-from .mpn import MPN, MPNEncoder
+from .mpn import MPN, MPNEncoder, MLP, Mlp_Trigonometric, MultiHeadAttention, Spiking_Attention
 from .ffn import MultiReadout, FFNAtten
 
 __all__ = [
@@ -7,5 +7,9 @@ __all__ = [
     'MPN',
     'MPNEncoder',
     'MultiReadout',
-    'FFNAtten'
+    'FFNAtten',
+    'MLP',
+    'Mlp_Trigonometric',
+    'MultiHeadAttention',
+    'Spiking_Attention',
 ]
