@@ -67,11 +67,6 @@ class CommonArgs(Tap):
     """:class:`CommonArgs` contains arguments that are used in both :class:`TrainArgs` and :class:`PredictArgs`."""
     """input type"""
     output_fingerprint: Literal['atom', 'mol', 'hyper'] = 'atom'
-    """machine learning model"""
-    output_head: Literal['FFN', 'Transformer', 'MLP'] = 'FFN'
-    """the model architecture in readout(output header)"""
-    message_type: Literal['message', 'multiheadattention', 'mlptrigonometric'] = 'message'
-    """message type the model in message passing"""
     input_features_type: Literal['chemprop', 'molecule_level_feature'] = 'chemprop'
     """input features chemprop is the default of chemrpop, molecule_level is divided three different input feature"""
     smiles_columns: List[str] = None

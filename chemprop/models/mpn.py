@@ -11,99 +11,6 @@ from chemprop.nn_utils import index_select_ND, get_activation_function
 from torch import Tensor
 
 
-
-
-
-class Mlp_Trigonometric(nn.Module):
-    """An :class:`Mlp_Trigonometric` is a wave neural network for aggregating message passing."""
-    def __init__(self, dim):
-        super().__init__()
-        self.fc_h = nn.Linear(dim, dim)
-        self.fc_w = nn.Linear(dim, dim)
-        self.tfc_h = nn.Linear(dim, dim)
-
-    def forward(self, x: Tensor, m: Tensor) -> Tensor:
-        """
-         aggregating message passing.
-
-         :param x: A tensor containing additional x descriptors .
-         :param m: A tensor containing additional m descriptors.
-         :return: A PyTorch tensor of shape :code:`(# num_bonds x hidden)` containing the encoding of each num_bonds.
-         """
-        x_h = self.fc_h(x)
-        x_w = self.fc_w(m)
-
-        x_h = x_w * torch.sin(x_h)
-
-        h = self.tfc_h(x_h)
-
-
-        return h, h
-
-
-class MLP(nn.Module):
-    """An :class:`MLP` is a MLP for aggregating message passing."""
-    def __init__(self, dim, hidden_dim, out_dim=None) -> None:
-        super().__init__()
-        out_dim = out_dim or dim
-        self.fc1 = nn.Linear(dim, hidden_dim)
-        self.act = nn.GELU()
-        self.fc2 = nn.Linear(hidden_dim, out_dim)
-
-    def forward(self, x: Tensor) -> Tensor:
-        return self.fc2(self.act(self.fc1(x)))
-
-
-class MultiHeadAttention(nn.Module):
-    """An :class:`MultiHeadAttention` is a MultiHeadAttention neural network for aggregating message passing."""
-    def __init__(self, embed_size, heads):
-        super(MultiHeadAttention, self).__init__()
-        self.embed_size = embed_size
-        self.heads = heads
-        self.head_dim = embed_size // heads
-
-        assert (
-                self.head_dim * heads == embed_size
-        ), "Embedding size needs to be divisible by heads"
-
-        self.values = nn.Linear(self.head_dim, self.head_dim, bias=False)
-        self.keys = nn.Linear(self.head_dim, self.head_dim, bias=False)
-        self.queries = nn.Linear(self.head_dim, self.head_dim, bias=False)
-        self.fc_out = nn.Linear(heads * self.head_dim, embed_size)
-
-    def forward(self, values, keys, query)-> torch.Tensor:
-        """
-        aggregating message passing.
-
-        :param values: A tensor containing additional values descriptors .
-        :param keys: A tensor containing additional key descriptors.
-        :param query: A tensor containing additional query descriptors
-        :return: A PyTorch tensor of shape :code:`(# num_bonds x hidden)` containing the encoding of each num_bonds.
-        """
-        N = query.shape[0]
-
-        values = values.reshape(N, self.heads, self.head_dim)
-        keys = keys.reshape(N, self.heads, self.head_dim)
-        queries = query.reshape(N, self.heads, self.head_dim)
-
-        values = self.values(values)
-        keys = self.keys(keys)
-        queries = self.queries(queries)
-
-        # Scale dot-product attention
-        energy = torch.einsum("nqd,nkd->nqk", [queries, keys])
-        attention = torch.softmax(energy / (self.embed_size ** (1 / 2)), dim=2)
-        out = torch.einsum("nql,nld->nqd", [attention, values]).reshape(
-            N, self.heads * self.head_dim
-        )
-
-        out = self.fc_out(out)
-        return out
-
-
-
-
-
 class MPNEncoder(nn.Module):
     """An :class:`MPNEncoder` is a message passing neural network for encoding a molecule."""
 
@@ -181,11 +88,8 @@ class MPNEncoder(nn.Module):
             self.bond_descriptors_layer = nn.Linear(self.hidden_size + self.bond_descriptors_size,
                                                     self.hidden_size + self.bond_descriptors_size, )
         self.output_fingerprint = args.output_fingerprint
+        self.input_features_type = args.input_features_type
 
-        self.message_type = args.message_type
-        self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
-        self.Mlp_Trigonometric_mol = Mlp_Trigonometric(self.hidden_size)
-        self.Spiking_Attention = Spiking_Attention(self.hidden_size)
 
 
     def forward(self,
@@ -234,82 +138,29 @@ class MPNEncoder(nn.Module):
         else:
             input = self.W_i(f_bonds)  # num_bonds x hidden_size
         message = self.act_func(input)  # num_bonds x hidden_size
-        message_attention_original = message  # num_bonds x hidden_size save the original message
-        # Determine which model to use
-        if self.message_type == 'mlptrigonometric':
 
-            for depth in range(self.depth - 1):
-                if self.undirected:
-                    message = (message + message[b2revb]) / 2
+        for depth in range(self.depth - 1):
+            if self.undirected:
+                message = (message + message[b2revb]) / 2
 
-                if self.atom_messages:
-                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-                else:
-                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                    # message      a_message = sum(nei_a_message)      rev_message
-                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                    rev_message = message[b2revb]  # num_bonds x hidden
-                    message = a_message[b2a] - rev_message  # num_bonds x hidden
-                    message, _ = self.Mlp_Trigonometric(message, message_attention_original) # num_bonds x hidden
-                    # message,_ = self.Mlp_Trigonometric(message, f_mol)
-                message = self.W_h(message)
-                message = self.act_func(input + message)  # num_bonds x hidden_size
-                message = self.dropout(message)  # num_bonds x hidden
+            if self.atom_messages:
+                nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
+                nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
+                nei_message = torch.cat((nei_a_message, nei_f_bonds),
+                                        dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
+                message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
+            else:
+                # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
+                # message      a_message = sum(nei_a_message)      rev_message
+                nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
+                a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
+                rev_message = message[b2revb]  # num_bonds x hidden
+                message = a_message[b2a] - rev_message  # num_bonds x hidden
 
-        elif self.message_type == "message":
-            for depth in range(self.depth - 1):
-                if self.undirected:
-                    message = (message + message[b2revb]) / 2
+            message = self.W_h(message)
+            message = self.act_func(input + message)  # num_bonds x hidden_size
+            message = self.dropout(message)  # num_bonds x hidden
 
-                if self.atom_messages:
-                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-                else:
-                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                    # message      a_message = sum(nei_a_message)      rev_message
-                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                    rev_message = message[b2revb]  # num_bonds x hidden
-                    message = a_message[b2a] - rev_message  # num_bonds x hidden
-
-                message = self.W_h(message)
-                message = self.act_func(input + message)  # num_bonds x hidden_size
-                message = self.dropout(message)  # num_bonds x hidden
-
-        elif self.message_type == 'multiheadattention':
-
-            for depth in range(self.depth - 1):
-                if self.undirected:
-                    message = (message + message[b2revb]) / 2
-
-                if self.atom_messages:
-                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-                else:
-                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                    # message      a_message = sum(nei_a_message)      rev_message
-                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                    rev_message = message[b2revb]  # num_bonds x hidden
-                    message = a_message[b2a] - rev_message  # num_bonds x hidden
-                    message = self.self_attention(message, message, message_attention_original) # num_bonds x hidden attention aggregate
-
-                message = self.W_h(message)
-                message = self.act_func(input + message)  # num_bonds x hidden_size
-                message = self.dropout(message)  # num_bonds x hidden
-        else:
-            raise Exception(f"Error message or Exception type. the message type is:{self.message_type}")
 
         # atom hidden
         a2x = a2a if self.atom_messages else a2b
@@ -317,14 +168,16 @@ class MPNEncoder(nn.Module):
         a_message = nei_a_message.sum(dim=1)  # num_atoms x hidd
         a_input = torch.cat([f_atoms, a_message], dim=1)  # num_atoms x (atom_fdim + hidden)
         ########mol_feature########
-        # m_input = torch.cat([f_mol_atom, a_message], dim=1)
-        # mol_hiddens = self.act_func(self.W_m(m_input))  # num_atoms x hidden
-        # mol_hiddens = self.dropout(mol_hiddens)  # num_atoms x hidden
+        if self.input_features_type == 'molecule_level_feature':
+            m_input = torch.cat([f_mol_atom, a_message], dim=1)
+            mol_hiddens = self.act_func(self.W_m(m_input))  # num_atoms x hidden
+            mol_hiddens = self.dropout(mol_hiddens)  # num_atoms x hidden
+        else:
+            pass
         ################
         atom_hiddens = self.act_func(self.W_o(a_input))  # num_atoms x hidden
         atom_hiddens = self.dropout(atom_hiddens)  # num_atoms x hidden
-        ####aggratetion
-        # atom_hiddens,_ = self.Mlp_Trigonometric_mol(mol_hiddens, atom_hiddens)
+
 
         if self.is_atom_bond_targets:
             b_input = torch.cat([f_bonds, message], dim=1)  # num_bonds x (bond_fdim + hidden)

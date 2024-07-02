@@ -24,7 +24,6 @@ class MoleculeModel(nn.Module):
         """
         super(MoleculeModel, self).__init__()
 
-        self.output_head = args.output_head
         self.classification = args.dataset_type == "classification"
         self.multiclass = args.dataset_type == "multiclass"
         self.loss_function = args.loss_function
@@ -80,9 +79,6 @@ class MoleculeModel(nn.Module):
         self.create_ffn(args)
 
         initialize_weights(self)
-
-
-        self.wave_readout = Mlp_Trigonometric(1) #Mlp_Sin module to aggrate the atom_feature, bond_feature and molcule_feature
 
         self.output_fingerprint = args.output_fingerprint
 
@@ -148,17 +144,6 @@ class MoleculeModel(nn.Module):
                 weights_ffn_num_layers=args.weights_ffn_num_layers,
             )
         elif self.output_head == 'FFN':
-            # self.mainbody = build_ffn(
-            #     first_linear_dim=atom_first_linear_dim,
-            #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-            #     num_layers=args.ffn_num_layers,
-            #     output_size=atom_first_linear_dim,
-            #     dropout=args.dropout,
-            #     activation=args.activation,
-            #     dataset_type=args.dataset_type,
-            #     spectra_activation=args.spectra_activation,
-            # )
-
             self.readout = build_ffn(
                 first_linear_dim=atom_first_linear_dim,
                 hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
@@ -169,84 +154,6 @@ class MoleculeModel(nn.Module):
                 dataset_type=args.dataset_type,
                 spectra_activation=args.spectra_activation,
             )
-
-        # elif self.output_head == 'Transformer':
-        #     # self.mainbody = build_pyramid_transformer(
-        #     #     first_linear_dim=atom_first_linear_dim,
-        #     #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #     #     num_layers=args.ffn_num_layers,
-        #     #     output_size=atom_first_linear_dim,
-        #     #     dropout=args.dropout,
-        #     #     activation=args.activation,
-        #     #     dataset_type=args.dataset_type,
-        #     #     spectra_activation=args.spectra_activation,
-        #     # )
-        #     self.mainbody = build_transformer(
-        #         first_linear_dim=atom_first_linear_dim,
-        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #         num_layers=args.ffn_num_layers,
-        #         # num_heads=args.ffn_num_layers,
-        #         output_size=atom_first_linear_dim,
-        #         dropout=args.dropout,
-        #         activation=args.activation,
-        #         dataset_type=args.dataset_type,
-        #         spectra_activation=args.spectra_activation,
-        #     )
-        #     self.readout = build_transformer(
-        #         first_linear_dim=atom_first_linear_dim,
-        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #         num_layers=args.ffn_num_layers,
-        #         # num_heads=args.ffn_num_layers,
-        #         output_size=self.relative_output_size * args.num_tasks,
-        #         dropout=args.dropout,
-        #         activation=args.activation,
-        #         dataset_type=args.dataset_type,
-        #         spectra_activation=args.spectra_activation,
-        #     )
-        #
-        # elif self.output_head == 'Wave':
-        #     # self.mainbody = build_pyramid_transformer(
-        #     #     first_linear_dim=atom_first_linear_dim,
-        #     #     hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #     #     num_layers=args.ffn_num_layers,
-        #     #     output_size=atom_first_linear_dim,
-        #     #     dropout=args.dropout,
-        #     #     activation=args.activation,
-        #     #     dataset_type=args.dataset_type,
-        #     #     spectra_activation=args.spectra_activation,
-        #     # )
-        #     self.mainbody = build_wave(
-        #         first_linear_dim=atom_first_linear_dim,
-        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #         num_layers=args.ffn_num_layers,
-        #         # num_heads=args.ffn_num_layers,
-        #         output_size=atom_first_linear_dim,
-        #         dropout=args.dropout,
-        #         activation=args.activation,
-        #         dataset_type=args.dataset_type,
-        #         spectra_activation=args.spectra_activation,
-        #     )
-        #     self.readout = build_wave(
-        #         first_linear_dim=atom_first_linear_dim,
-        #         hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
-        #         num_layers=args.ffn_num_layers,
-        #         # num_heads=args.ffn_num_layers,
-        #         output_size=self.relative_output_size * args.num_tasks,
-        #         dropout=args.dropout,
-        #         activation=args.activation,
-        #         dataset_type=args.dataset_type,
-        #         spectra_activation=args.spectra_activation,
-        #     )
-
-        # elif self.output_head == 'Retnet':
-        #     # self.readout = RetNet(
-        #     #     layers=3,
-        #     #     hidden_dim=300,
-        #     #     ffn_size=2048,
-        #     #     heads=5,
-        #     #     double_v_dim=True
-        #     # )
-        #     pass
         else:
             raise ValueError(f"Invalid argument Unkonwn type{self.model}")
 
