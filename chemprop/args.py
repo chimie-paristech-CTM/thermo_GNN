@@ -66,6 +66,11 @@ def get_checkpoint_paths(checkpoint_path: Optional[str] = None,
 class CommonArgs(Tap):
     """:class:`CommonArgs` contains arguments that are used in both :class:`TrainArgs` and :class:`PredictArgs`."""
 
+
+    output_fingerprint: Literal['atom', 'mol', 'hyper'] = 'atom'
+    "the type of fingerprint"
+    input_features_type: Literal['chemprop', 'molecule_level_feature'] = 'chemprop'
+    "the type of input features"
     smiles_columns: List[str] = None
     """List of names of the columns containing SMILES strings.
     By default, uses the first :code:`number_of_molecules` columns."""
