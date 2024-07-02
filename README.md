@@ -52,7 +52,7 @@ Folder Structure:
 ```
 
 ```
-python train.py --data_path <path>  --dataset_type <type>  --fingerprint <fingerprint>  --save_dir <dir> --epochs <epochs> --output_head <output_head> --message_type <message_type> --multidata <multidata>  --smiles_label_values <smiles_label_values> --input_features_type <input_features_type>
+python train.py --data_path <path>  --dataset_type <type>  --fingerprint <fingerprint>  --save_dir <dir> --epochs <epochs> --multidata <multidata>  --smiles_label_values <smiles_label_values> --input_features_type <input_features_type>
 ```
 where 
 1. `<path>` is the path to contain multi dataset directory and every have a dataset CSV file. 
@@ -60,17 +60,15 @@ where
 3. `<dir>` is the directory where model checkpoints will be saved. 
 4. `<fingerprint>` containing [atom, mol, hyper] depending on the type of dataset you want. 
 5. `<epochs>` control traing model epoch. 
-6. `<output_head>`  containing [FNN, Transformer, MLP] controling the output model.
-7. `<message_type>` containing ['message', 'multiheadattention', 'mlpsin','spiking'] controling the train model.
-8. `<multidata>` containing [multi, multi_single_input] controling two ways to read input csv file.
-9. `<aggregation>` containing [sum, mean, norm] controling the output type of output_head.
-10. `<input_features_type>` containing [chemprop, molecule_level_feature] controling to use defualt chemprop input feature or atom and molecula level feature as input.
-11. `<smiles_label_values>` "xxdata1xx,0.5" "fxxdata2xx,0.3" "xxdata3xx,0.7" "xxdata4xx,1.2" "xxdata5xx,1.3" controling training loss in different dataset csv file. If do not use this, it will be 1 as defuat.
+6. `<multidata>` containing [multi, multi_single_input] controling two ways to read input csv file.
+7. `<aggregation>` containing [sum, mean, norm] controling the output type of output_head.
+8. `<input_features_type>` containing [chemprop, molecule_level_feature] controling to use defualt chemprop input feature or atom and molecula level feature as input.
+9. `<smiles_label_values>` "xxdata1xx,0.5" "fxxdata2xx,0.3" "xxdata3xx,0.7" "xxdata4xx,1.2" "xxdata5xx,1.3" controling training loss in different dataset csv file. If do not use this, it will be 1 as defuat.
 For example:
 Supporting multiple datasets, please place the data in the dataset/smalldataset directory. The file format is displayed above, where * data1 *. csv's data1 can be replaced with any character. Use -- data_path to specify the path to its "dataset/smalldataset", where "--multidata t" is equal to having multi data mode enabled, and "--smiles_label_values" is the declared error factor for each dataset. If -- smiles_label_values is not used, the default error factor is 1.
 run:
 ```
-python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2 --output_head FFN --message_type mlptrigonometric  --smiles_label_values "esol_train,0.5" "freesolv_train,0.3" "pdbbind_full_train,0.7" "lipo_train,1.2" "lipo,1.3"  --multidata 'multi' --input_features_type molecule_level_feature --aggregation norm
+python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2 --smiles_label_values "esol_train,0.5" "freesolv_train,0.3" "pdbbind_full_train,0.7" "lipo_train,1.2" "lipo,1.3"  --multidata 'multi' --input_features_type molecule_level_feature --aggregation norm
 ```
 
 ## how to train multidata model with single input csv file
@@ -97,7 +95,7 @@ data:
 └── 
 ```
 ```
-python train.py --data_path <path>  --dataset_type <type>  --fingerprint <fingerprint>  --save_dir <dir> --epochs <epochs> --output_head <output_head> --message_type <message_type> --multidata <multidata>  --smiles_label_values <smiles_label_values> --input_features_type <input_features_type> --ignore_columns <ignore_columns>
+python train.py --data_path <path>  --dataset_type <type>  --fingerprint <fingerprint>  --save_dir <dir> --epochs <epochs>  --multidata <multidata>  --smiles_label_values <smiles_label_values> --input_features_type <input_features_type> --ignore_columns <ignore_columns>
 ```
 same as above. special attention to follow.
 1. `<ignore_column>` represent the target_label name in the csv file.
@@ -105,17 +103,17 @@ same as above. special attention to follow.
 Supporting multiple datasets with a sum csv file.
 run:
 ```
-python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2 --output_head FFN --message_type mlptrigonometric  --smiles_label_values "esol_train,0.5" "freesolv_train,0.3" "pdbbind_full_train,0.7" "lipo_train,1.2" "lipo,1.3" --ignore_columns 'dataset_columns' --multidata 'multi_single_input' --input_features_type molecule_level_feature --aggregation norm
+python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2 --smiles_label_values "esol_train,0.5" "freesolv_train,0.3" "pdbbind_full_train,0.7" "lipo_train,1.2" "lipo,1.3" --ignore_columns 'dataset_columns' --multidata 'multi_single_input' --input_features_type molecule_level_feature --aggregation norm
 ```
 ## To train a model in Regular method
 To train a model, run:
 ```
-python train.py --data_path <path> --dataset_type <type> --save_dir <dir> --output_head <output_head> --epochs <epoch> --input_features_type <input_features_type> --aggregation <norm> --message_type <message_type> --output_fingerprint <output_fingerprint>
+python train.py --data_path <path> --dataset_type <type> --save_dir <dir>  --epochs <epoch> --input_features_type <input_features_type> --aggregation <norm> --output_fingerprint <output_fingerprint>
 ```
 <>
 For example:
 ```
-python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2 --output_head FFN --message_type mlptrigonometric --input_features_type molecule_level_feature --aggregation norm
+python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2  --input_features_type molecule_level_feature --aggregation norm
 ```
 
 A full list of available command-line arguments can be found in [chemprop/args.py](https://github.com/xxxx).
