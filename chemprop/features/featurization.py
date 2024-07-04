@@ -7,7 +7,7 @@ import torch
 import numpy as np
 
 from chemprop.rdkit import make_mol
-
+from collections import Counter
 
 class Featurization_parameters:
     """
@@ -43,10 +43,11 @@ class Featurization_parameters:
         self.THREE_D_DISTANCE_BINS = list(range(0, self.THREE_D_DISTANCE_MAX + 1, self.THREE_D_DISTANCE_STEP))
 
         # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-        self.ATOM_FDIM = sum(len(choices) + 1 for choices in self.ATOM_FEATURES.values()) + 3 - 6
+        self.ATOM_FDIM = sum(len(choices) + 1 for choices in self.ATOM_FEATURES.values()) + 4 - 6
         self.EXTRA_ATOM_FDIM = 0
-        self.BOND_FDIM = 16
-        self.MOL_FDIM = 10
+        self.EXTRA_MOL_FDIM = 0
+        self.BOND_FDIM = 17
+        self.MOL_FDIM = 8
         self.EXTRA_BOND_FDIM = 0
         self.REACTION_MODE = None
         self.EXPLICIT_H = False
@@ -180,7 +181,9 @@ def reaction_mode() -> str:
 def set_extra_atom_fdim(extra):
     """Change the dimensionality of the atom feature vector."""
     PARAMS.EXTRA_ATOM_FDIM = extra
-
+def set_extra_mol_fdim(extra):
+    """Change the dimensionality of the atom feature vector."""
+    PARAMS.EXTRA_MOL_FDIM = extra
 
 def get_bond_fdim(atom_messages: bool = False,
                   overwrite_default_bond: bool = False,
@@ -247,22 +250,20 @@ def onek_encoding_ring(ring_sizes: Set[int], size_range: List[int]) -> List[int]
     return encoding
 
 
-def onek_encoding_multiplcity(value: int, choices: List[int]) -> List[int]:
-    """
-    Creates a multiplcity encoding with an extra category for uncommon values.
-    :param value: The value for which the encoding should be one.
-    :param choices: A list of possible values.
-    :return: A multiplcity encoding of the :code:`value` in a list of length :code:`len(choices)`.
-             If :code:`value` is not in :code:`choices`, then the final element in the encoding is 1.
-    """
-    encoding = [0] * (len(choices))
+def onek_encoding_spin_multiplicity(value: int, choices: List[int]) -> List[int]:
+    # Initialize the encoding list with zeros, with the same length as choices
+    encoding = [0] * len(choices)
 
-    if value < 1 or value > 3:
-        # raise ValueError("Invalid multiplycity value")
-        return [-1 for element in encoding]
-    vector = [1 if (i - 2) == value else 0 for i, element in enumerate(encoding)]
+    if value not in choices:
+        # If the value is not within the range of choices, raise a ValueError
+        raise ValueError("the spin multiplicity is not valid in 1 to 3")
+        return [-1 for i in range(value)]
+    else:
+        # Get the index of the value in choices and set the corresponding position in encoding to 1
+        index = choices.index(value)
+        encoding[index] = 1
 
-    return vector
+    return encoding
 
 
 def onek_encoding_charge(value: int, choices: List[int]) -> List[int]:
@@ -309,7 +310,28 @@ def calculate_spin_multiplicity(unpaired_electrons):
     S = unpaired_electrons / 2
     spin_multiplicity = 2 * S + 1
     return int(spin_multiplicity)
+def multi_count_encoding_ring(ring_counts: Counter, size_range: List[int]) -> List[int]:
+    """
+    Creates an encoding for the "In 𝑁-member ring" feature that counts the occurrences
+    of each ring size the atom participates in.
 
+    :param ring_counts: A Counter of ring sizes the atom participates in.
+    :param size_range: A list of possible ring sizes to consider.
+    :return: An encoding of the ring sizes, where the index of the encoding corresponds
+             to the ring size - 3 (since we consider ring sizes from 3 to 8). Each entry
+             represents the count of the atom appearing in rings of that size.
+    """
+    encoding = [0] * len(size_range)
+    large_ring_count = 0
+    for ring_size, count in ring_counts.items():
+        if ring_size in size_range:
+            index = size_range.index(ring_size)
+            encoding[index] = count
+        elif ring_size > max(size_range):
+            large_ring_count += count  # Count the number of large rings separately
+    if large_ring_count > 0:
+        encoding[-1] = large_ring_count
+    return encoding
 
 def atom_features(atom: Chem.rdchem.Atom, atom_in_rings, functional_groups: List[int] = None,
                   input_features_type: [str] = None) -> List[Union[bool, int, float]]:
@@ -328,16 +350,17 @@ def atom_features(atom: Chem.rdchem.Atom, atom_in_rings, functional_groups: List
                    onek_encoding_unk(int(atom.GetChiralTag()), PARAMS.ATOM_FEATURES['chiral_tag']) + \
                    onek_encoding_unk(int(atom.GetTotalNumHs()), PARAMS.ATOM_FEATURES['num_Hs']) + \
                    [1 if atom.GetIsAromatic() else 0] + \
-                   [atom.GetMass() * 0.01] + \
-                   [1 if atom.IsInRing() else 0]  # Add is_in_ring feature
+                   [atom.GetMass() * 0.01]
+                     # Add is_in_ring feature
         if functional_groups is not None:
             print(f"Functional groups: {functional_groups}")
             features += functional_groups
-        features += onek_encoding_ring(atom_in_rings, list(range(3, 9)))
-
+        if input_features_type == "jpca" or input_features_type == "molecule_level_feature":
+            features += onek_encoding_ring(atom_in_rings, list(range(3, 10))) + [1 if atom.IsInRing() else 0]
         if input_features_type == "chemprop":
             features += onek_encoding_unk(atom.GetFormalCharge(), PARAMS.ATOM_FEATURES['formal_charge']) + \
                         onek_encoding_unk(int(atom.GetHybridization()), PARAMS.ATOM_FEATURES['hybridization'])
+
 
     return features
 
@@ -375,7 +398,6 @@ def bond_features(bond: Chem.rdchem.Bond, bond_in_rings, input_features_type: [s
             (bond.IsInRing() if bt is not None else 0)
         ]
         fbond += onek_encoding_unk(int(bond.GetStereo()), list(range(6)))  # Add onek_encoding_unk(int(bond.GetStereo())
-        fbond += onek_encoding_ring(bond_in_rings, list(range(3, 9)))  # Add "In 𝑁-member ring" feature
     if input_features_type == 'chemprop':
         fbond += [
             bt == Chem.rdchem.BondType.SINGLE,
@@ -383,41 +405,31 @@ def bond_features(bond: Chem.rdchem.Bond, bond_in_rings, input_features_type: [s
             bt == Chem.rdchem.BondType.TRIPLE,
             bt == Chem.rdchem.BondType.AROMATIC
         ]
+    if input_features_type == 'jpca' or input_features_type == 'molecule_level_feature':
+        fbond += multi_count_encoding_ring(bond_in_rings, list(range(3, 10)))  # Add "In 𝑁-member ring" feature
     return fbond
 
 def mol_features(mol: Chem) -> List[Union[bool, int, float]]:
     if mol is None:
         features = [0] * PARAMS.ATOM_FDIM
     else:
+        # embedding formal_charge
         formal_charge = Chem.GetFormalCharge(mol)
-        num_electrons = 0
-        for atom in mol.GetAtoms():
-            num_electrons += atom.GetNumExplicitHs() + atom.GetFormalCharge()
-        # feature = []
-        # Calculate the sum of the total number of electrons and spin quantum numbers of atoms in a molecule
-        num_electrons = 0
-        spin_multiplicity = 0
-        # for atom in mol.GetAtoms():
-        #     num_electrons += atom.GetNumExplicitHs() + atom.GetFormalCharge()
-        #     # The contribution of each atom with spin electrons to multiplicity is 2, while without spin it is 1
-        #     spin_multiplicity += atom.GetNumRadicalElectrons() + 1
+        formal_charge = onek_encoding_charge(formal_charge, PARAMS.MOL_FEATURES['formal_charge'])
         if mol is None:
             return "Invalid SMILES string"
+        # embedding spin multiplicity
         unpaired_electrons = Chem.Descriptors.NumRadicalElectrons(mol)
         S = unpaired_electrons / 2
         spin_multiplicity = 2 * S + 1
-        spin_multiplicity = onek_encoding_multiplcity(spin_multiplicity, PARAMS.MOL_FEATURES['spin_multiplicity'])
-        formal_charge = onek_encoding_charge(formal_charge, PARAMS.MOL_FEATURES['formal_charge'])
-        # onek_encoding_unk(spin_multiplicity)
-        # Obtaining the logarithm of valence electrons of molecules
-        ptable = Chem.GetPeriodicTable()
-        valence = sum(ptable.GetNOuterElecs(atom.GetAtomicNum()) for atom in mol.GetAtoms())
+        spin_multiplicity = onek_encoding_spin_multiplicity(spin_multiplicity, PARAMS.MOL_FEATURES['spin_multiplicity'])
 
         # Add all features to the list
-        feature = formal_charge + spin_multiplicity
-        feature.extend([valence, num_electrons])
+        features = formal_charge
 
-        return feature
+        features = features + spin_multiplicity
+
+        return features
 
 
 def map_reac_to_prod(mol_reac: Chem.Mol, mol_prod: Chem.Mol):
@@ -477,9 +489,9 @@ class MolGraph:
     """
 
     def __init__(self, mol: Union[str, Chem.Mol, Tuple[Chem.Mol, Chem.Mol]],
-                 input_features_type=None,
                  atom_features_extra: np.ndarray = None,
                  bond_features_extra: np.ndarray = None,
+                 input_features_type=None,
                  overwrite_default_atom_features: bool = False,
                  overwrite_default_bond_features: bool = False):
         """
@@ -515,6 +527,7 @@ class MolGraph:
         self.b2revb = []  # mapping from bond index to the index of the reverse bond
         self.overwrite_default_atom_features = overwrite_default_atom_features
         self.overwrite_default_bond_features = overwrite_default_bond_features
+        self.input_features_type = input_features_type
 
         # generate the atom and bond in ring dict
         atom_in_rings = {}
@@ -526,13 +539,15 @@ class MolGraph:
         # Process bonds
         for bond in mol.GetBonds():
             bond_idx = bond.GetIdx()
-            in_ring_sizes = set(len(ring) for ring in bond_rings if bond_idx in ring and len(ring) in range(3, 9))
-            bond_in_rings[bond_idx] = in_ring_sizes
+            ring_sizes_bond = [len(ring) for ring in atom_rings if bond_idx in ring]
+            # in_ring_sizes = set(len(ring) for ring in bond_rings if bond_idx in ring and len(ring) in range(3, 10))
+            bond_in_rings[bond_idx] = Counter(ring_sizes_bond)
         # Process atoms
         for atom in mol.GetAtoms():
             atom_idx = atom.GetIdx()
-            in_ring_sizes = set(len(ring) for ring in atom_rings if atom_idx in ring and len(ring) in range(3, 9))
-            atom_in_rings[atom_idx] = in_ring_sizes
+            # in_ring_sizes = set(len(ring) for ring in atom_rings if atom_idx in ring and len(ring) in range(3, 10))
+            ring_sizes_atom = [len(ring) for ring in atom_rings if atom_idx in ring]
+            atom_in_rings[atom_idx] = Counter(ring_sizes_atom)
         # record the number of atom
 
         if not self.is_reaction:
@@ -723,19 +738,21 @@ class BatchMolGraph:
     * :code:`b2br`: (Optional): A mapping from f_bonds to real bonds in molecule recorded in targets.
     """
 
-    def __init__(self, mol_graphs: List[MolGraph], input_features_type=None):
+    def __init__(self, mol_graphs: List[MolGraph]):
         r"""
         :param mol_graphs: A list of :class:`MolGraph`\ s from which to construct the :class:`BatchMolGraph`.
         """
         self.mol_graphs = mol_graphs
         self.overwrite_default_atom_features = mol_graphs[0].overwrite_default_atom_features
         self.overwrite_default_bond_features = mol_graphs[0].overwrite_default_bond_features
+        self.input_features_type = mol_graphs[0].input_features_type
         self.is_reaction = mol_graphs[0].is_reaction
         self.atom_fdim = get_atom_fdim(overwrite_default_atom=self.overwrite_default_atom_features,
                                        is_reaction=self.is_reaction)
         self.bond_fdim = get_bond_fdim(overwrite_default_bond=self.overwrite_default_bond_features,
                                        overwrite_default_atom=self.overwrite_default_atom_features,
                                        is_reaction=self.is_reaction)
+        self.mol_fdim = get_mol_fdim( is_reaction=self.is_reaction)
         self.mol_fdim = get_mol_fdim(is_reaction=self.is_reaction)
 
         # Start n_atoms and n_bonds at 1 b/c zero padding
@@ -746,13 +763,19 @@ class BatchMolGraph:
         self.b_scope = []  # list of tuples indicating (start_bond_index, num_bonds) for each molecule
 
         # All start with zero padding so that indexing with zero padding returns zeros
-
-        if input_features_type == 'chemprop':
-            self.atom_fdim = self.atom_fdim + 12
-            self.bond_fdim = self.bond_fdim + 16
+        if self.input_features_type == 'chemprop':
+            self.atom_fdim = self.atom_fdim + 4
+            self.bond_fdim = self.bond_fdim + 1
             f_atoms = [[0] * self.atom_fdim]  # atom features
             f_bonds = [[0] * self.bond_fdim]  # combined atom/bond features
-        elif input_features_type == 'molecule_level_feature':
+        elif self.input_features_type == 'molecule_level_feature':
+            self.atom_fdim = self.atom_fdim
+            self.bond_fdim = self.bond_fdim
+            f_atoms = [[0] * self.atom_fdim]  # atom features
+            f_bonds = [[0] * self.bond_fdim]  # combined atom/bond features
+        elif self.input_features_type == 'jpca':
+            self.atom_fdim = self.atom_fdim
+            self.bond_fdim = self.bond_fdim
             f_atoms = [[0] * self.atom_fdim]  # atom features
             f_bonds = [[0] * self.bond_fdim]  # combined atom/bond features
         else:
@@ -882,6 +905,7 @@ def mol2graph(mols: Union[List[str], List[Chem.Mol], List[Tuple[Chem.Mol, Chem.M
               bond_features_batch: List[np.array] = (None,),
               overwrite_default_atom_features: bool = False,
               overwrite_default_bond_features: bool = False,
+              input_features_type = None,
               ) -> BatchMolGraph:
     """
     Converts a list of SMILES or RDKit molecules to a :class:`BatchMolGraph` containing the batch of molecular graphs.
@@ -893,8 +917,7 @@ def mol2graph(mols: Union[List[str], List[Chem.Mol], List[Tuple[Chem.Mol, Chem.M
     :param overwrite_default_bond_features: Boolean to overwrite default bond descriptors by bond_descriptors instead of concatenating.
     :return: A :class:`BatchMolGraph` containing the combined molecular graph for the molecules.
     """
-    input_features_type = None
-    return BatchMolGraph([MolGraph(mol, af, bf, input_features_type,
+    return BatchMolGraph([MolGraph(mol, af, bf, input_features_type=overwrite_default_atom_features,
                                    overwrite_default_atom_features=overwrite_default_atom_features,
                                    overwrite_default_bond_features=overwrite_default_bond_features)
                           for mol, af, bf

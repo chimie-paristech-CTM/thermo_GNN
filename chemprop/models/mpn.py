@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 from chemprop.args import TrainArgs
-from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, mol2graph
+from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, get_mol_fdim, mol2graph
 from chemprop.nn_utils import index_select_ND, get_activation_function
 
 
@@ -28,8 +28,14 @@ class MPNEncoder(nn.Module):
         self.atom_fdim = atom_fdim
         self.bond_fdim = bond_fdim
         if args.input_features_type == "chemprop":
-            self.atom_fdim += 12
-            self.bond_fdim += 16
+            self.atom_fdim += 4
+            self.bond_fdim += 1
+        elif args.input_features_type == "molecule_level_feature":
+            self.atom_fdim
+            self.bond_fdim
+        elif args.input_features_type == "jpca":
+            self.atom_fdim
+            self.bond_fdim
         self.mol_fdim = mol_fdim
         self.atom_messages = args.atom_messages
         self.hidden_size = hidden_size or args.hidden_size
@@ -71,8 +77,6 @@ class MPNEncoder(nn.Module):
         self.sdim_h = nn.Linear(args.batch_size, self.hidden_size)
 
         self.h_one = nn.Linear(self.hidden_size,1)
-
-        self.wave_readout = Mlp_Trigonometric(self.hidden_size)
 
 
         if self.is_atom_bond_targets:
@@ -281,7 +285,8 @@ class MPN(nn.Module):
     def __init__(self,
                  args: TrainArgs,
                  atom_fdim: int = None,
-                 bond_fdim: int = None):
+                 bond_fdim: int = None,
+                 mol_fdim: int = None,):
         """
         :param args: A :class:`~chemprop.args.TrainArgs` object containing model arguments.
         :param atom_fdim: Atom feature vector dimension.
@@ -296,6 +301,7 @@ class MPN(nn.Module):
                                                     overwrite_default_bond=args.overwrite_default_bond_features,
                                                     atom_messages=args.atom_messages,
                                                     is_reaction=self.reaction if self.reaction is not False else self.reaction_solvent)
+        self.mol_fdim = mol_fdim or get_mol_fdim( is_reaction=self.reaction if self.reaction is not False else self.reaction_solvent)
         self.features_only = args.features_only
         self.use_input_features = args.use_input_features
         self.device = args.device
@@ -309,9 +315,9 @@ class MPN(nn.Module):
 
         if not self.reaction_solvent:
             if args.mpn_shared:
-                self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim)] * args.number_of_molecules)
+                self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim, self.mol_fdim)] * args.number_of_molecules)
             else:
-                self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim)
+                self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim, self.mol_fdim)
                                              for _ in range(args.number_of_molecules)])
         else:
             self.encoder = MPNEncoder(args, self.atom_fdim, self.bond_fdim)

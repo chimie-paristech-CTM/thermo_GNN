@@ -23,6 +23,7 @@ from chemprop.rdkit import make_mol
 # Increase maximum size of field in the csv processing for the current architecture
 csv.field_size_limit(int(ctypes.c_ulong(-1).value // 2))
 
+
 def get_header(path: str) -> List[str]:
     """
     Returns the header of a data CSV file.
@@ -54,7 +55,7 @@ def preprocess_smiles_columns(path: str,
             columns = get_header(path)
             smiles_columns = columns[:number_of_molecules]
         else:
-            smiles_columns = [None]*number_of_molecules
+            smiles_columns = [None] * number_of_molecules
     else:
         if isinstance(smiles_columns, str):
             smiles_columns = [smiles_columns]
@@ -69,11 +70,11 @@ def preprocess_smiles_columns(path: str,
 
 
 def get_task_names(
-    path: str,
-    smiles_columns: Union[str, List[str]] = None,
-    target_columns: List[str] = None,
-    ignore_columns: List[str] = None,
-    loss_function: str = None,
+        path: str,
+        smiles_columns: Union[str, List[str]] = None,
+        target_columns: List[str] = None,
+        ignore_columns: List[str] = None,
+        loss_function: str = None,
 ) -> List[str]:
     """
     Gets the task names from a data CSV file.
@@ -141,7 +142,7 @@ def get_mixed_task_names(path: str,
     ignore_columns = set(smiles_columns + ([] if ignore_columns is None else ignore_columns))
 
     if target_columns is not None:
-        target_names =  target_columns
+        target_names = target_columns
     else:
         target_names = [column for column in columns if column not in ignore_columns]
 
@@ -182,7 +183,7 @@ def get_mixed_task_names(path: str,
                     is_bond_target = True
                 else:
                     raise ValueError(f'Unrecognized targets of column {column} in {path}.')
-                
+
                 if is_atom_target:
                     atom_target_names.append(column)
                 elif is_bond_target:
@@ -248,7 +249,7 @@ def get_constraints(path: str,
         raw_constraints_data = np.transpose(raw_constraints_data)  # each is num_data x num_columns
     else:
         raw_constraints_data = None
-    
+
     return constraints_data, raw_constraints_data
 
 
@@ -274,7 +275,8 @@ def get_smiles(path: str,
         raise ValueError('If smiles_column is provided, the CSV file must have a header.')
 
     if (isinstance(smiles_columns, str) or smiles_columns is None) and header:
-        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns, number_of_molecules=number_of_molecules)
+        smiles_columns = preprocess_smiles_columns(path=path, smiles_columns=smiles_columns,
+                                                   number_of_molecules=number_of_molecules)
 
     with open(path) as f:
         if header:
@@ -301,7 +303,8 @@ def filter_invalid_smiles(data: MoleculeDataset) -> MoleculeDataset:
     return MoleculeDataset([datapoint for datapoint in tqdm(data)
                             if all(s != '' for s in datapoint.smiles) and all(m is not None for m in datapoint.mol)
                             and all(m.GetNumHeavyAtoms() > 0 for m in datapoint.mol if not isinstance(m, tuple))
-                            and all(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() > 0 for m in datapoint.mol if isinstance(m, tuple))])
+                            and all(
+            m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() > 0 for m in datapoint.mol if isinstance(m, tuple))])
 
 
 def get_invalid_smiles_from_file(path: str = None,
@@ -349,10 +352,9 @@ def get_invalid_smiles_from_list(smiles: List[List[str]], reaction: bool = False
         mols = make_mols(smiles=mol_smiles, reaction_list=is_reaction_list, keep_h_list=is_explicit_h_list,
                          add_h_list=is_adding_hs_list, keep_atom_map_list=keep_atom_map_list)
         if any(s == '' for s in mol_smiles) or \
-           any(m is None for m in mols) or \
-           any(m.GetNumHeavyAtoms() == 0 for m in mols if not isinstance(m, tuple)) or \
-           any(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() == 0 for m in mols if isinstance(m, tuple)):
-
+                any(m is None for m in mols) or \
+                any(m.GetNumHeavyAtoms() == 0 for m in mols if not isinstance(m, tuple)) or \
+                any(m[0].GetNumHeavyAtoms() + m[1].GetNumHeavyAtoms() == 0 for m in mols if isinstance(m, tuple)):
             invalid_smiles.append(mol_smiles)
 
     return invalid_smiles
@@ -487,9 +489,11 @@ def get_data(path: str,
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames
         if any([c not in fieldnames for c in smiles_columns]):
-            raise ValueError(f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
+            raise ValueError(
+                f'Data file did not contain all provided smiles columns: {smiles_columns}. Data file field names are: {fieldnames}')
         if any([c not in fieldnames for c in target_columns]):
-            raise ValueError(f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
+            raise ValueError(
+                f'Data file did not contain all provided target columns: {target_columns}. Data file field names are: {fieldnames}')
 
         all_smiles, all_targets, all_atom_targets, all_bond_targets, all_rows, all_features, all_phase_features, all_constraints_data, all_raw_constraints_data, all_weights, all_gt, all_lt = [], [], [], [], [], [], [], [], [], [], [], []
         for i, row in enumerate(tqdm(reader)):
@@ -504,7 +508,8 @@ def get_data(path: str,
                     if loss_function == 'bounded_mse':
                         targets.append(float(value.strip('<>')))
                     else:
-                        raise ValueError('Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
+                        raise ValueError(
+                            'Inequality found in target data. To use inequality targets (> or <), the regression loss function bounded_mse must be used.')
                 elif '[' in value or ']' in value:
                     value = value.replace('None', 'null')
                     target = np.array(json.loads(value))
@@ -518,7 +523,8 @@ def get_data(path: str,
                         bond_target_arranged = []
                         mol = make_mol(smiles[0], args.explicit_h, args.adding_h, args.keeping_atom_map)
                         for bond in mol.GetBonds():
-                            bond_target_arranged.append(target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
+                            bond_target_arranged.append(
+                                target[bond.GetBeginAtom().GetIdx(), bond.GetEndAtom().GetIdx()])
                         bond_targets.append(np.array(bond_target_arranged))
                         targets.append(np.array(bond_target_arranged))
                     else:
@@ -608,9 +614,10 @@ def get_data(path: str,
                 constraints=all_constraints_data[i] if constraints_data is not None else None,
                 raw_constraints=all_raw_constraints_data[i] if raw_constraints_data is not None else None,
                 overwrite_default_atom_features=args.overwrite_default_atom_features if args is not None else False,
-                overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False
+                overwrite_default_bond_features=args.overwrite_default_bond_features if args is not None else False,
+                input_features_type=args.input_features_type
             ) for i, (smiles, targets) in tqdm(enumerate(zip(all_smiles, all_targets)),
-                                            total=len(all_smiles))
+                                               total=len(all_smiles))
         ])
 
     # Filter out invalid SMILES
@@ -672,9 +679,11 @@ def get_inequality_targets(path: str, target_columns: List[str] = None) -> List[
             gt_targets.append(['>' in val for val in values])
             lt_targets.append(['<' in val for val in values])
             if any(['<' in val and '>' in val for val in values]):
-                raise ValueError(f'A target value in csv file {path} contains both ">" and "<" symbols. Inequality targets must be on one edge and not express a range.')
+                raise ValueError(
+                    f'A target value in csv file {path} contains both ">" and "<" symbols. Inequality targets must be on one edge and not express a range.')
 
     return gt_targets, lt_targets
+
 
 def split_data(data: MoleculeDataset,
                split_type: str = 'random',
@@ -684,8 +693,8 @@ def split_data(data: MoleculeDataset,
                num_folds: int = 1,
                args: TrainArgs = None,
                logger: Logger = None) -> Tuple[MoleculeDataset,
-                                               MoleculeDataset,
-                                               MoleculeDataset]:
+MoleculeDataset,
+MoleculeDataset]:
     r"""
     Splits data into training, validation, and test splits.
 
@@ -727,7 +736,8 @@ def split_data(data: MoleculeDataset,
 
     elif split_type in {'cv', 'cv-no-test'}:
         if num_folds <= 1 or num_folds > len(data):
-            raise ValueError(f'Number of folds for cross-validation must be between 2 and the number of valid datapoints ({len(data)}), inclusive.')
+            raise ValueError(
+                f'Number of folds for cross-validation must be between 2 and the number of valid datapoints ({len(data)}), inclusive.')
 
         random = Random(0)
 
@@ -800,7 +810,8 @@ def split_data(data: MoleculeDataset,
         return MoleculeDataset(train), MoleculeDataset(val), MoleculeDataset(test)
 
     elif split_type == 'scaffold_balanced':
-        return scaffold_split(data, sizes=sizes, balanced=True, key_molecule_index=key_molecule_index, seed=seed, logger=logger)
+        return scaffold_split(data, sizes=sizes, balanced=True, key_molecule_index=key_molecule_index, seed=seed,
+                              logger=logger)
 
     elif split_type == 'random_with_repeated_smiles':  # Use to constrain data with the same smiles go in the same split.
         smiles_dict = defaultdict(set)
@@ -813,7 +824,7 @@ def split_data(data: MoleculeDataset,
         train_size = int(sizes[0] * len(data))
         val_size = int(sizes[1] * len(data))
         for index_set in index_sets:
-            if len(train)+len(index_set) <= train_size:
+            if len(train) + len(index_set) <= train_size:
                 train += index_set
             elif len(val) + len(index_set) <= val_size:
                 val += index_set

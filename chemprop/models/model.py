@@ -143,7 +143,7 @@ class MoleculeModel(nn.Module):
                 shared_ffn=args.shared_atom_bond_ffn,
                 weights_ffn_num_layers=args.weights_ffn_num_layers,
             )
-        elif self.output_head == 'FFN':
+        else:
             self.readout = build_ffn(
                 first_linear_dim=atom_first_linear_dim,
                 hidden_size=args.ffn_hidden_size + args.atom_descriptors_size,
@@ -154,9 +154,6 @@ class MoleculeModel(nn.Module):
                 dataset_type=args.dataset_type,
                 spectra_activation=args.spectra_activation,
             )
-        else:
-            raise ValueError(f"Invalid argument Unkonwn type{self.model}")
-
         if args.checkpoint_frzn is not None:
             if args.frzn_ffn_layers > 0:
                 if self.is_atom_bond_targets:
