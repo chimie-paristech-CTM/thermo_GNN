@@ -355,8 +355,10 @@ def atom_features(atom: Chem.rdchem.Atom, atom_in_rings, functional_groups: List
         if functional_groups is not None:
             print(f"Functional groups: {functional_groups}")
             features += functional_groups
-        if input_features_type == "jpca" or input_features_type == "molecule_level_feature":
-            features += onek_encoding_ring(atom_in_rings, list(range(3, 10))) + [1 if atom.IsInRing() else 0]
+        if input_features_type == "jpca":
+            features += onek_encoding_ring(atom_in_rings, list(range(3, 9))) + [1 if atom.IsInRing() else 0]
+        elif input_features_type == "molecule_level_feature":
+            features += multi_count_encoding_ring(atom_in_rings, list(range(3, 10))) + [1 if atom.IsInRing() else 0]
         if input_features_type == "chemprop":
             features += onek_encoding_unk(atom.GetFormalCharge(), PARAMS.ATOM_FEATURES['formal_charge']) + \
                         onek_encoding_unk(int(atom.GetHybridization()), PARAMS.ATOM_FEATURES['hybridization'])
@@ -405,8 +407,12 @@ def bond_features(bond: Chem.rdchem.Bond, bond_in_rings, input_features_type: [s
             bt == Chem.rdchem.BondType.TRIPLE,
             bt == Chem.rdchem.BondType.AROMATIC
         ]
-    if input_features_type == 'jpca' or input_features_type == 'molecule_level_feature':
+    elif input_features_type == 'jpca':
+        fbond += onek_encoding_ring(bond_in_rings, list(range(3, 9)))  # Add "In 𝑁-member ring" feature
+    elif input_features_type == 'molecule_level_feature':
         fbond += multi_count_encoding_ring(bond_in_rings, list(range(3, 10)))  # Add "In 𝑁-member ring" feature
+    else:
+        raise ValueError(f'wrong input_features_type{input_features_type}')
     return fbond
 
 def mol_features(mol: Chem) -> List[Union[bool, int, float]]:
@@ -774,8 +780,8 @@ class BatchMolGraph:
             f_atoms = [[0] * self.atom_fdim]  # atom features
             f_bonds = [[0] * self.bond_fdim]  # combined atom/bond features
         elif self.input_features_type == 'jpca':
-            self.atom_fdim = self.atom_fdim
-            self.bond_fdim = self.bond_fdim
+            self.atom_fdim = self.atom_fdim-1
+            self.bond_fdim = self.bond_fdim-2
             f_atoms = [[0] * self.atom_fdim]  # atom features
             f_bonds = [[0] * self.bond_fdim]  # combined atom/bond features
         else:

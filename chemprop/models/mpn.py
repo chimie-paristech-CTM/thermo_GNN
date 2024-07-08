@@ -34,8 +34,10 @@ class MPNEncoder(nn.Module):
             self.atom_fdim
             self.bond_fdim
         elif args.input_features_type == "jpca":
-            self.atom_fdim
-            self.bond_fdim
+            self.atom_fdim -= 1
+            self.bond_fdim -= 2
+        else:
+            raise ValueError(f"Unrecognized input feature{args.input_feature_type}")
         self.mol_fdim = mol_fdim
         self.atom_messages = args.atom_messages
         self.hidden_size = hidden_size or args.hidden_size
@@ -59,17 +61,24 @@ class MPNEncoder(nn.Module):
 
         # Input
         input_dim = self.atom_fdim if self.atom_messages else self.bond_fdim
+        # if args.input_features_type == "molecule_level_feature" or args.input_features_type == "chemprop":
         self.W_i = nn.Linear(input_dim, self.hidden_size, bias=self.bias)
-
+        # elif args.input_features_type == "jpca":
+        #     self.W_i = nn.Linear(input_dim-2, self.hidden_size, bias=self.bias)
+        # else:
+        #     raise ValueError(f'input_feature_type does not exist')
         if self.atom_messages:
             w_h_input_size = self.hidden_size + self.bond_fdim
         else:
             w_h_input_size = self.hidden_size
 
         self.W_h = nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)
-
+        # if args.input_features_type == "molecule_level_feature" or args.input_features_type == "chemprop":
         self.W_o = nn.Linear(self.atom_fdim + self.hidden_size, self.hidden_size)
-
+        # elif args.input_features_type == "jpca":
+        #     self.W_o = nn.Linear(self.atom_fdim + self.hidden_size-1, self.hidden_size)
+        # else:
+        #     raise ValueError(f'input_feature_type does not exist')
         self.W_m = nn.Linear(8 + self.hidden_size, self.hidden_size)
 
         self.fdim_h = nn.Linear(self.mol_fdim, self.hidden_size)
