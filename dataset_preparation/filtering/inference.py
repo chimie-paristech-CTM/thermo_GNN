@@ -11,9 +11,9 @@ def configure_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def load_model(model_path, input_dim, hidden_dim1, hidden_dim2, output_dim):
+def load_model(model_path, input_dim, output_dim):
     logging.info("Loading model...")
-    model = NeuralNetwork(input_dim, hidden_dim1, hidden_dim2, output_dim)
+    model = NeuralNetwork(input_dim, output_dim)
     model.load_state_dict(torch.load(model_path))
     model.eval()
     logging.info("Model loaded.")
@@ -78,8 +78,6 @@ if __name__ == "__main__":
         'data_path': 'dataset_pc9/pc9.csv',
         'model_path': './saved_model_pc9/best_neural_network.pth',
         'output_path': './dataset_pc9/pc9/predicted_pc9.csv',
-        'hidden_dim1': 300,  # Adjust according to your model
-        'hidden_dim2': 100,  # Adjust according to your model
-        'output_dim': 1,  # Adjust according to your model
+        'output_dim': 1,
     }
     main(config)

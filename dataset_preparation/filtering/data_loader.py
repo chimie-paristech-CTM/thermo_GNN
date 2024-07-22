@@ -10,7 +10,7 @@ class MoleculeDataset(Dataset):
         self.features = self.data.drop(columns=['smiles', 'energy'])
         self.targets = self.data['energy']
 
-        # 检查数据中的 NaN 和无穷大值
+        # check NaN infinite values
         assert not self.features.isnull().values.any(), "Features contain NaN"
         assert not self.targets.isnull().values.any(), "Targets contain NaN"
         assert np.isfinite(self.features.values).all(), "Features contain infinite values"

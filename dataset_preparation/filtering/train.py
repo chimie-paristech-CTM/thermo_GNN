@@ -41,8 +41,7 @@ def main(config):
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'], shuffle=False)
 
     print(f"Number of parameters: {train_dataset.features.shape[1]}   train_dataset.features.shape[1]{train_dataset.features.shape[1]}\n")
-    model = NeuralNetwork(train_dataset.features.shape[1], config['hidden_dim1'], config['hidden_dim2'],
-                          config['output_dim'])
+    model = NeuralNetwork(train_dataset.features.shape[1], config['output_dim'])
     if use_gpu:
         model = model.cuda()
 
@@ -107,8 +106,6 @@ if __name__ == "__main__":
         'val_data_path': 'dataset_qmugs25/qmugs25_val.csv',
         'save_dir': './saved_model_qmugs25',
         'model_path': './saved_model_qmugs25/best_neural_network.pth',
-        'hidden_dim1': 300,
-        'hidden_dim2': 100,
         'output_dim': 1,
     }
     main(config)
