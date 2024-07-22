@@ -55,12 +55,10 @@ def main(config):
     inference_loader = DataLoader(inference_dataset, batch_size=config['batch_size'], shuffle=False)
     logging.info("Data loaded.")
 
-    input_dim = inference_dataset.features.shape[1]  # Adjust according to your dataset
-    hidden_dim1 = config['hidden_dim1']
-    hidden_dim2 = config['hidden_dim2']
+    input_dim = inference_dataset.features.shape[1]
     output_dim = config['output_dim']
 
-    model = load_model(config['model_path'], input_dim, hidden_dim1, hidden_dim2, output_dim)
+    model = load_model(config['model_path'], input_dim, output_dim)
     if config['use_gpu']:
         model = model.cuda()
 
