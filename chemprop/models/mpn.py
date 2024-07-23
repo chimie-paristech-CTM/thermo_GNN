@@ -5,12 +5,35 @@ import numpy as np
 from rdkit import Chem
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, get_mol_fdim, mol2graph
 from chemprop.nn_utils import index_select_ND, get_activation_function
 
+class Mlp_Trigonometric(nn.Module):
+    """An :class:`Mlp_Trigonometric` is a wave neural network for aggregating message passing."""
+    def __init__(self, dim):
+        super().__init__()
+        self.fc_h = nn.Linear(dim, dim)
+        self.fc_w = nn.Linear(dim, dim)
+        self.tfc_h = nn.Linear(dim, dim)
+    def forward(self, x: Tensor, m: Tensor) -> Tensor:
+        """
+         aggregating message passing.
 
+         :param x: A tensor containing additional x descriptors .
+         :param m: A tensor containing additional m descriptors.
+         :return: A PyTorch tensor of shape :code:`(# num_bonds x hidden)` containing the encoding of each num_bonds.
+         """
+        x_h = self.fc_h(x)
+        x_w = self.fc_w(m)
+
+        x_h = x_w * torch.sin(x_h)
+
+        h = self.tfc_h(x_h)
+
+        return h
 class MPNEncoder(nn.Module):
     """An :class:`MPNEncoder` is a message passing neural network for encoding a molecule."""
 
@@ -49,6 +72,7 @@ class MPNEncoder(nn.Module):
         self.aggregation = args.aggregation
         self.aggregation_norm = args.aggregation_norm
         self.is_atom_bond_targets = args.is_atom_bond_targets
+        self.model = args.model
 
         # Dropout
         self.dropout = nn.Dropout(args.dropout)
@@ -61,24 +85,18 @@ class MPNEncoder(nn.Module):
 
         # Input
         input_dim = self.atom_fdim if self.atom_messages else self.bond_fdim
-        # if args.input_features_type == "molecule_level_feature" or args.input_features_type == "chemprop":
+
         self.W_i = nn.Linear(input_dim, self.hidden_size, bias=self.bias)
-        # elif args.input_features_type == "jpca":
-        #     self.W_i = nn.Linear(input_dim-2, self.hidden_size, bias=self.bias)
-        # else:
-        #     raise ValueError(f'input_feature_type does not exist')
+
         if self.atom_messages:
             w_h_input_size = self.hidden_size + self.bond_fdim
         else:
             w_h_input_size = self.hidden_size
 
         self.W_h = nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)
-        # if args.input_features_type == "molecule_level_feature" or args.input_features_type == "chemprop":
+
         self.W_o = nn.Linear(self.atom_fdim + self.hidden_size, self.hidden_size)
-        # elif args.input_features_type == "jpca":
-        #     self.W_o = nn.Linear(self.atom_fdim + self.hidden_size-1, self.hidden_size)
-        # else:
-        #     raise ValueError(f'input_feature_type does not exist')
+
         self.W_m = nn.Linear(8 + self.hidden_size, self.hidden_size)
 
         self.fdim_h = nn.Linear(self.mol_fdim, self.hidden_size)
@@ -87,6 +105,7 @@ class MPNEncoder(nn.Module):
 
         self.h_one = nn.Linear(self.hidden_size,1)
 
+        self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
 
         if self.is_atom_bond_targets:
             self.W_o_b = nn.Linear(self.bond_fdim + self.hidden_size, self.hidden_size)
@@ -151,29 +170,54 @@ class MPNEncoder(nn.Module):
         else:
             input = self.W_i(f_bonds)  # num_bonds x hidden_size
         message = self.act_func(input)  # num_bonds x hidden_size
+        if self.model == 'mlptrigonometric':
+            message_original = message
+            for depth in range(self.depth - 1):
+                if self.undirected:
+                    message = (message + message[b2revb]) / 2
 
-        for depth in range(self.depth - 1):
-            if self.undirected:
-                message = (message + message[b2revb]) / 2
+                if self.atom_messages:
+                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
+                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
+                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
+                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
+                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
+                else:
+                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
+                    # message      a_message = sum(nei_a_message)      rev_message
+                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
+                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
+                    rev_message = message[b2revb]  # num_bonds x hidden
+                    message = a_message[b2a] - rev_message  # num_bonds x hidden
+                    message = self.Mlp_Trigonometric(message, message_original) # num_bonds x hidden
 
-            if self.atom_messages:
-                nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                        dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-            else:
-                # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                # message      a_message = sum(nei_a_message)      rev_message
-                nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                rev_message = message[b2revb]  # num_bonds x hidden
-                message = a_message[b2a] - rev_message  # num_bonds x hidden
+                message = self.W_h(message)
+                message = self.act_func(input + message)  # num_bonds x hidden_size
+                message = self.dropout(message)  # num_bonds x hidden
+        elif self.model == 'mpnn':
+            for depth in range(self.depth - 1):
+                if self.undirected:
+                    message = (message + message[b2revb]) / 2
 
-            message = self.W_h(message)
-            message = self.act_func(input + message)  # num_bonds x hidden_size
-            message = self.dropout(message)  # num_bonds x hidden
+                if self.atom_messages:
+                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
+                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
+                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
+                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
+                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
+                else:
+                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
+                    # message      a_message = sum(nei_a_message)      rev_message
+                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
+                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
+                    rev_message = message[b2revb]  # num_bonds x hidden
+                    message = a_message[b2a] - rev_message  # num_bonds x hidden
 
+                message = self.W_h(message)
+                message = self.act_func(input + message)  # num_bonds x hidden_size
+                message = self.dropout(message)  # num_bonds x hidden
+        else:
+            raise Exception(f"Error message or Exception type. the message type is:{self.model}")
 
         # atom hidden
         a2x = a2a if self.atom_messages else a2b
@@ -251,8 +295,6 @@ class MPNEncoder(nn.Module):
                     mol_vecs.append(mol_vec)
 
             mol_vecs = torch.stack(mol_vecs, dim=0)  # (num_molecules, hidden_size)
-            f_mol_tensor = self.fdim_h(f_mol) # (num_molecules, hidden_size)
-            mol_vecs,_ = self.wave_readout(mol_vecs, f_mol_tensor)
 
             return mol_vecs, a_scope  # num_molecules x hidden
         elif self.output_fingerprint == "hyper":
