@@ -5,7 +5,6 @@ import argparse
 import pandas as pd
 import os
 import numpy as np
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import pickle
 
@@ -73,41 +72,11 @@ class MoleculeProcessor:
         return {'data': data}
 
 
-def main(args):
-    processor = MoleculeProcessor()
-    molecules = processor.process_csv(args.file_path)
-    datasets = processor.split_dataset(molecules)
-    for dataset_name, data in datasets.items():
-        output_filename = args.file_path.replace('.csv', f'_{dataset_name}.csv')
-        processor.save_to_csv(data, output_filename)
-
-    # Continue with model training
-    train_features, train_target = load_data(output_filename)
-
-    # Create model
-    model = LinearRegression()
-
-    # Train model
-    model.fit(train_features, train_target)
-
-    # Evaluate model on training data
-    train_rmse, train_mae, train_r2, _ = evaluate(train_features, train_target, model)
-
-    print(f'Train RMSE: {train_rmse:.6f}, MAE: {train_mae:.6f}, R2: {train_r2:.6f}')
-
-    # Save model
-    os.makedirs(args.save_dir, exist_ok=True)
-    model_path = os.path.join(args.save_dir, 'best_linear_model.pkl')
-    with open(model_path, 'wb') as f:
-        pickle.dump(model, f)
-    print(f'Model saved to {model_path}')
-
-
 def load_data(file_path):
     data = pd.read_csv(file_path)
     features = data.iloc[:, 1:-1].values
     target = data.iloc[:, -1].values
-    return features, target
+    return features, target, data
 
 
 def evaluate(features, target, model):
@@ -118,9 +87,39 @@ def evaluate(features, target, model):
     return rmse, mae, r2, preds
 
 
+def main(args):
+    processor = MoleculeProcessor()
+    molecules = processor.process_csv(args.file_path)
+
+    # Save processed data to a temporary file
+    temp_filename = args.file_path.replace('.csv', '_processed.csv')
+    processor.save_to_csv(molecules, temp_filename)
+
+    # Load processed data for prediction
+    predict_features, predict_target, predict_data = load_data(temp_filename)
+
+    # Load best model
+    with open(args.model_path, 'rb') as f:
+        best_model = pickle.load(f)
+
+    # Predict on processed data
+    rmse, mae, r2, preds = evaluate(predict_features, predict_target, best_model)
+
+    # Save predictions with specified columns
+    predictions_df = predict_data.iloc[:, [0, -1]].copy()
+    predictions_df['Predictions'] = preds
+    predictions_path = os.path.join(args.save_dir, 'predictions.csv')
+    predictions_df.to_csv(predictions_path, index=False)
+
+    print(f'Predictions saved to {predictions_path}')
+    print(f'Predict RMSE: {rmse:.6f}, MAE: {mae:.6f}, R2: {r2:.6f}')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--file_path', default="./pc9_val.csv", help="Path to the input CSV file.")
-    parser.add_argument('--save_dir', default='./saved_model_pc9/', help="Directory to save the trained model.")
+    parser.add_argument('--model_path', default="./saved_model_pc9/best_linear_model.pkl",
+                        help="Path to the saved model file.")
+    parser.add_argument('--save_dir', default="./saved_model_pc9/", help="Directory to save predictions.")
     args = parser.parse_args()
     main(args)
