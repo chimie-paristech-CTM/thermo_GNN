@@ -25,6 +25,10 @@ class MoleculeProcessor:
                                                   "Cl": -460.1338818, },
             "Formation_Enthalpy_B3LYP/6-31G(d)": {"C": -38.0962914, "H": -0.5810156, "O": -75.1564768, "Br":  -2571.6973513,
                                              "P": -341.3309732, "F": -99.746247, "N": -54.757613, "S":  -398.18514 , "Cl": -460.1725895,},
+            "Formation_EE_B3LYP/6-31G(d)": {"C": -38.10280868, "H": -0.5877412036, "O": -75.160020097,
+                                            "F": -99.749126099, "N": -54.762064333, },
+            "atomization_EE_B3LYP/6-31G(d)": {"C": -37.8462799747, "H": -0.500272784186, "O": -75.0606214291,
+                                              "N": -54.5844893898, "F": -99.7155354580},
             ###qm9
             "Atomization_Enthalpy_B3LYP/6-31G(2df,p)": {"C": -37.8444107, "H": -0.4979123, "O": -75.0622174,"Br": -2571.8212326, "P": -341.255194, "F": -99.716369, "N": -54.581501,
                                                       "S": -398.1033955, "Cl": -460.1343255, },
@@ -33,12 +37,13 @@ class MoleculeProcessor:
             ###paton
             "Atomization_Enthalpy_M06-2X/def2-TZVP": {"C": -37.8401451, "H": -0.4950509, "O": -74.9702017,"Br": -2574.1479438, "P": -341.2389756, "I": -297.6094277, "F": -99.6058557,
                                                     "N": -54.5190721, "S": -397.9588298, "Cl": -460.1302234, },
-            "Formation_Enthalpy_M06-2X/def2-TZVP": {"C": -38.096271, "H": -0.5774791, "O": -75.1599267, "Br":  -2574.1854855 ,
-                                             "P": -341.3273055, "I": -297.6366371, "F": -99.7579281, "N": -54.7634213, "S":  -398.1749635 , "Cl": -460.177522,},
+            "Formation_Enthalpy_M06-2X/def2-TZVP": {"C": -38.096271, "H": -0.5774791, "O": -75.1599267, "Br": -2574.1854855,
+                                                    "P": -341.360178, "I": -297.6366371, "F": -99.7579281,"N": -54.7634213, "S": -398.1749635, "Cl": -460.177522,
+                                                    "B": -24.821267},
             ###qmug
             "Atomization_Enthalpy_ωB97X-D/def2-SVP": {"C": -37.795443, "H": -0.4995215, "O": -74.9743032, "Br": -2573.8545726, "P": -341.1371926, "I": -297.7481894, "F": -99.6120933, "N": -54.5200622, "S": -397.9695617, "Cl": -459.9861458 ,"B": -24.792447},
             "Formation_Enthalpy_ωB97X-D/def2-SVP": {"C": -38.0568914, "H": -0.5791978, "O": -75.0740582, "Br":  -2573.8917577 ,
-                                             "P": -341.2167247, "I": -297.7802878,"F": -99.6410919, "N": -54.6950353, "S":  -398.04901 , "Cl": -460.0280681,
+                                             "P": -341.245752, "I": -297.7802878,"F": -99.6410919, "N": -54.6950353, "S":  -398.04901 , "Cl": -460.0280681,
                                              "B": -24.792447},
 
         }
@@ -120,6 +125,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--accuracy_level', default="Formation_enrgy_B3LYP/6-31G(d)", help="Specify the accuracy level for calculations.")
     parser.add_argument('--read_method', default="rdkit", help="Method to read and process SMILES.")
-    parser.add_argument('--file_path', default="./pc9_processed_data.csv", help="Path to the input CSV file.")
+    parser.add_argument('--file_path', default="./pc9.csv", help="Path to the input CSV file.")
     args = parser.parse_args()
     main(args)

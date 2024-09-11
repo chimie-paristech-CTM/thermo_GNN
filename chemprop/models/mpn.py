@@ -5,35 +5,44 @@ import numpy as np
 from rdkit import Chem
 import torch
 import torch.nn as nn
-from torch import Tensor
 
 from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, get_mol_fdim, mol2graph
 from chemprop.nn_utils import index_select_ND, get_activation_function
+from torch import Tensor
+
 
 class Mlp_Trigonometric(nn.Module):
-    """An :class:`Mlp_Trigonometric` is a wave neural network for aggregating message passing."""
+    """An :class:`Mlp_Trigonometric` is a fast mlp-mixer module for aggregating message passing."""
+
     def __init__(self, dim):
         super().__init__()
-        self.fc_h = nn.Linear(dim, dim)
-        self.fc_w = nn.Linear(dim, dim)
-        self.tfc_h = nn.Linear(dim, dim)
+        self.fc_x = nn.Linear(dim, dim)
+        self.fc_m = nn.Linear(dim, dim)
+        self.out = nn.Linear(dim, dim)
+        self.gelu = nn.GELU()
+        self.layer_norm = nn.LayerNorm(dim)
+
     def forward(self, x: Tensor, m: Tensor) -> Tensor:
         """
          aggregating message passing.
 
-         :param x: A tensor containing additional x descriptors .
-         :param m: A tensor containing additional m descriptors.
+         :param x: A Two-dimensional vector (# num_bonds x hidden) from message passing.
+         :param m: A Two-dimensional vector (# num_bonds x hidden) from original bond feature.
          :return: A PyTorch tensor of shape :code:`(# num_bonds x hidden)` containing the encoding of each num_bonds.
          """
-        x_h = self.fc_h(x)
-        x_w = self.fc_w(m)
+        x_x = self.layer_norm(x)
+        x_x = self.fc_x(x_x)
+        x_m = self.fc_m(m)
 
-        x_h = x_w * torch.sin(x_h)
+        x_x = x_m * torch.sin(x_x)
 
-        h = self.tfc_h(x_h)
+        x_x = self.gelu(x_x)
+        h = self.out(x_x) + x
 
         return h
+
+
 class MPNEncoder(nn.Module):
     """An :class:`MPNEncoder` is a message passing neural network for encoding a molecule."""
 
@@ -72,7 +81,6 @@ class MPNEncoder(nn.Module):
         self.aggregation = args.aggregation
         self.aggregation_norm = args.aggregation_norm
         self.is_atom_bond_targets = args.is_atom_bond_targets
-        self.model = args.model
 
         # Dropout
         self.dropout = nn.Dropout(args.dropout)
@@ -85,9 +93,12 @@ class MPNEncoder(nn.Module):
 
         # Input
         input_dim = self.atom_fdim if self.atom_messages else self.bond_fdim
-
+        # if args.input_features_type == "molecule_level_feature" or args.input_features_type == "chemprop":
         self.W_i = nn.Linear(input_dim, self.hidden_size, bias=self.bias)
-
+        # elif args.input_features_type == "jpca":
+        #     self.W_i = nn.Linear(input_dim-2, self.hidden_size, bias=self.bias)
+        # else:
+        #     raise ValueError(f'input_feature_type does not exist')
         if self.atom_messages:
             w_h_input_size = self.hidden_size + self.bond_fdim
         else:
@@ -95,7 +106,7 @@ class MPNEncoder(nn.Module):
 
         self.W_h = nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)
 
-        self.W_o = nn.Linear(self.atom_fdim + self.hidden_size, self.hidden_size)
+        self.W_o = nn.Linear(8 + self.atom_fdim + self.hidden_size, self.hidden_size)
 
         self.W_m = nn.Linear(8 + self.hidden_size, self.hidden_size)
 
@@ -103,9 +114,7 @@ class MPNEncoder(nn.Module):
 
         self.sdim_h = nn.Linear(args.batch_size, self.hidden_size)
 
-        self.h_one = nn.Linear(self.hidden_size,1)
-
-        self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
+        self.h_one = nn.Linear(self.hidden_size, 1)
 
         if self.is_atom_bond_targets:
             self.W_o_b = nn.Linear(self.bond_fdim + self.hidden_size, self.hidden_size)
@@ -121,8 +130,7 @@ class MPNEncoder(nn.Module):
                                                     self.hidden_size + self.bond_descriptors_size, )
         self.output_fingerprint = args.output_fingerprint
         self.input_features_type = args.input_features_type
-
-
+        self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
 
     def forward(self,
                 mol_graph: BatchMolGraph,
@@ -142,11 +150,12 @@ class MPNEncoder(nn.Module):
                 1]])] + atom_descriptors_batch  # padding the first with 0 to match the atom_hiddens
             atom_descriptors_batch = torch.from_numpy(np.concatenate(atom_descriptors_batch, axis=0)).float().to(
                 self.device)
-        #f_mol_atom shape is same as f_atom
+        # f_mol_atom shape is same as f_atom
         f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope, f_mol, f_mol_atom = mol_graph.get_components(
             atom_messages=self.atom_messages)
-        f_atoms, f_bonds, a2b, b2a, b2revb,  f_mol, f_mol_atom = f_atoms.to(self.device), f_bonds.to(self.device), a2b.to(
-            self.device), b2a.to(self.device), b2revb.to(self.device),  f_mol.to(self.device), f_mol_atom.to(self.device)
+        f_atoms, f_bonds, a2b, b2a, b2revb, f_mol, f_mol_atom = f_atoms.to(self.device), f_bonds.to(
+            self.device), a2b.to(
+            self.device), b2a.to(self.device), b2revb.to(self.device), f_mol.to(self.device), f_mol_atom.to(self.device)
 
         if self.is_atom_bond_targets:
             b2br = mol_graph.get_b2br().to(self.device)
@@ -170,69 +179,47 @@ class MPNEncoder(nn.Module):
         else:
             input = self.W_i(f_bonds)  # num_bonds x hidden_size
         message = self.act_func(input)  # num_bonds x hidden_size
-        if self.model == 'mlptrigonometric':
-            message_original = message
-            for depth in range(self.depth - 1):
-                if self.undirected:
-                    message = (message + message[b2revb]) / 2
+        message_attention_original = message  # num_bonds x hidden_size save the original message
 
-                if self.atom_messages:
-                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-                else:
-                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                    # message      a_message = sum(nei_a_message)      rev_message
-                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                    rev_message = message[b2revb]  # num_bonds x hidden
-                    message = a_message[b2a] - rev_message  # num_bonds x hidden
-                    message = self.Mlp_Trigonometric(message, message_original) # num_bonds x hidden
+        for depth in range(self.depth - 1):
+            if self.undirected:
+                message = (message + message[b2revb]) / 2
 
-                message = self.W_h(message)
-                message = self.act_func(input + message)  # num_bonds x hidden_size
-                message = self.dropout(message)  # num_bonds x hidden
-        elif self.model == 'mpnn':
-            for depth in range(self.depth - 1):
-                if self.undirected:
-                    message = (message + message[b2revb]) / 2
+            if self.atom_messages:
+                nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
+                nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
+                nei_message = torch.cat((nei_a_message, nei_f_bonds),
+                                        dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
+                message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
+            else:
+                # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
+                # message      a_message = sum(nei_a_message)      rev_message
+                nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
+                a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
+                rev_message = message[b2revb]  # num_bonds x hidden
+                message = a_message[b2a] - rev_message  # num_bonds x hidden
+                message = self.Mlp_Trigonometric(message, message_attention_original)  # num_bonds x hidden
 
-                if self.atom_messages:
-                    nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                    nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                    nei_message = torch.cat((nei_a_message, nei_f_bonds),
-                                            dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                    message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-                else:
-                    # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                    # message      a_message = sum(nei_a_message)      rev_message
-                    nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                    a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                    rev_message = message[b2revb]  # num_bonds x hidden
-                    message = a_message[b2a] - rev_message  # num_bonds x hidden
-
-                message = self.W_h(message)
-                message = self.act_func(input + message)  # num_bonds x hidden_size
-                message = self.dropout(message)  # num_bonds x hidden
-        else:
-            raise Exception(f"Error message or Exception type. the message type is:{self.model}")
+            message = self.W_h(message)
+            message = self.act_func(input + message)  # num_bonds x hidden_size
+            message = self.dropout(message)  # num_bonds x hidden
 
         # atom hidden
         a2x = a2a if self.atom_messages else a2b
         nei_a_message = index_select_ND(message, a2x)  # num_atoms x max_num_bonds x hidden
         a_message = nei_a_message.sum(dim=1)  # num_atoms x hidd
-        a_input = torch.cat([f_atoms, a_message], dim=1)  # num_atoms x (atom_fdim + hidden)
-        ##mol_feature
+
+        a_input = torch.cat([f_mol_atom, f_atoms, a_message], dim=1)  # num_atoms x (atom_fdim + hidden)
+
+        # mol_feature
         if self.input_features_type == 'molecule_level_feature':
-            m_input = torch.cat([f_mol_atom, a_message], dim=1)
-            mol_hiddens = self.act_func(self.W_m(m_input))  # num_atoms x hidden
-            atom_hiddens = self.dropout(mol_hiddens)  # num_atoms x hidden
-        else:
+
             atom_hiddens = self.act_func(self.W_o(a_input))  # num_atoms x hidden
             atom_hiddens = self.dropout(atom_hiddens)  # num_atoms x hidden
 
+        else:
+            atom_hiddens = self.act_func(self.W_o(a_input))  # num_atoms x hidden
+            atom_hiddens = self.dropout(atom_hiddens)  # num_atoms x hidden
 
         if self.is_atom_bond_targets:
             b_input = torch.cat([f_bonds, message], dim=1)  # num_bonds x (bond_fdim + hidden)
@@ -271,8 +258,6 @@ class MPNEncoder(nn.Module):
                 else:
 
                     mol_vec = atom_hiddens  # (num_atoms, hidden_size)
-                    # f_mol_atom_tensor = self.fdim_h(f_mol_atom)
-                    # mol_vec1,_ = self.wave_readout(mol_vec, f_mol_atom_tensor)
                     atom_vecs.append(mol_vec)
 
             atom_vecs = torch.cat(atom_vecs, dim=0)  # (num_atoms, 300)
@@ -329,7 +314,6 @@ class MPNEncoder(nn.Module):
             return mol_vecs, atom_vecs, a_scope  # num_molecules x hidden
 
 
-
 class MPN(nn.Module):
     """An :class:`MPN` is a wrapper around :class:`MPNEncoder` which featurizes input as needed."""
 
@@ -337,7 +321,7 @@ class MPN(nn.Module):
                  args: TrainArgs,
                  atom_fdim: int = None,
                  bond_fdim: int = None,
-                 mol_fdim: int = None,):
+                 mol_fdim: int = None, ):
         """
         :param args: A :class:`~chemprop.args.TrainArgs` object containing model arguments.
         :param atom_fdim: Atom feature vector dimension.
@@ -352,7 +336,8 @@ class MPN(nn.Module):
                                                     overwrite_default_bond=args.overwrite_default_bond_features,
                                                     atom_messages=args.atom_messages,
                                                     is_reaction=self.reaction if self.reaction is not False else self.reaction_solvent)
-        self.mol_fdim = mol_fdim or get_mol_fdim( is_reaction=self.reaction if self.reaction is not False else self.reaction_solvent)
+        self.mol_fdim = mol_fdim or get_mol_fdim(
+            is_reaction=self.reaction if self.reaction is not False else self.reaction_solvent)
         self.features_only = args.features_only
         self.use_input_features = args.use_input_features
         self.device = args.device
@@ -366,10 +351,11 @@ class MPN(nn.Module):
 
         if not self.reaction_solvent:
             if args.mpn_shared:
-                self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim, self.mol_fdim)] * args.number_of_molecules)
+                self.encoder = nn.ModuleList(
+                    [MPNEncoder(args, self.atom_fdim, self.bond_fdim, self.mol_fdim)] * args.number_of_molecules)
             else:
                 self.encoder = nn.ModuleList([MPNEncoder(args, self.atom_fdim, self.bond_fdim, self.mol_fdim)
-                                             for _ in range(args.number_of_molecules)])
+                                              for _ in range(args.number_of_molecules)])
         else:
             self.encoder = MPNEncoder(args, self.atom_fdim, self.bond_fdim)
             # Set separate atom_fdim and bond_fdim for solvent molecules
@@ -383,7 +369,8 @@ class MPN(nn.Module):
                                               args.hidden_size_solvent, args.bias_solvent, args.depth_solvent)
 
     def forward(self,
-                batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
+                batch: Union[
+                    List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
                 features_batch: List[np.ndarray] = None,
                 atom_descriptors_batch: List[np.ndarray] = None,
                 atom_features_batch: List[np.ndarray] = None,
@@ -451,7 +438,8 @@ class MPN(nn.Module):
                 raise NotImplementedError('Atom descriptors are currently only supported with one molecule '
                                           'per input (i.e., number_of_molecules = 1).')
 
-            encodings = [enc(ba, atom_descriptors_batch, bond_descriptors_batch) for enc, ba in zip(self.encoder, batch)]
+            encodings = [enc(ba, atom_descriptors_batch, bond_descriptors_batch) for enc, ba in
+                         zip(self.encoder, batch)]
         else:
             if not self.reaction_solvent:
                 encodings = [enc(ba) for enc, ba in zip(self.encoder, batch)]
