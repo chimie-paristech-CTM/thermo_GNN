@@ -70,7 +70,7 @@ class CommonArgs(Tap):
     "the type of fingerprint"
     input_features_type: Literal['chemprop', 'molecule_level_feature', 'jpca'] = 'chemprop'
     "the type of input features"
-    model: Literal['mpnn', 'mlptrigonometric'] = 'mlptrigonometric'
+    model: Literal['dmpnn', 'mlptrigonometric','kantrigonometric'] = 'mlptrigonometric'
     "the types of model"
     smiles_columns: List[str] = None
     """List of names of the columns containing SMILES strings.

@@ -10,8 +10,36 @@ from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph, get_atom_fdim, get_bond_fdim, get_mol_fdim, mol2graph
 from chemprop.nn_utils import index_select_ND, get_activation_function
 from torch import Tensor
+from kan import KAN
+class KAN_Trigonometric(nn.Module):
+    """An :class:`Mlp_Trigonometric` is a fast mlp-mixer module for aggregating message passing."""
 
+    def __init__(self, dim):
+        super().__init__()
+        self.fc_x = nn.Linear(dim, dim)
+        self.fc_m = KAN([dim, dim])
+        self.out = nn.Linear(dim, dim)
+        self.gelu = nn.GELU()
+        self.layer_norm = nn.LayerNorm(dim)
 
+    def forward(self, x: Tensor, m: Tensor) -> Tensor:
+        """
+         aggregating message passing.
+
+         :param x: A Two-dimensional vector (# num_bonds x hidden) from message passing.
+         :param m: A Two-dimensional vector (# num_bonds x hidden) from original bond feature.
+         :return: A PyTorch tensor of shape :code:`(# num_bonds x hidden)` containing the encoding of each num_bonds.
+         """
+        x_x = self.layer_norm(x)
+        x_x = self.fc_x(x_x)
+        x_m = self.fc_m(m)
+
+        x_x = x_m * torch.cos(x_x)
+
+        x_x = self.gelu(x_x)
+        h = self.out(x_x) + x
+
+        return h
 class Mlp_Trigonometric(nn.Module):
     """An :class:`Mlp_Trigonometric` is a fast mlp-mixer module for aggregating message passing."""
 
@@ -57,6 +85,7 @@ class MPNEncoder(nn.Module):
         :param depth: Number of message passing steps.
        """
         super(MPNEncoder, self).__init__()
+        self.model = args.model
         self.atom_fdim = atom_fdim
         self.bond_fdim = bond_fdim
         if args.input_features_type == "chemprop":
@@ -130,8 +159,12 @@ class MPNEncoder(nn.Module):
                                                     self.hidden_size + self.bond_descriptors_size, )
         self.output_fingerprint = args.output_fingerprint
         self.input_features_type = args.input_features_type
-        self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
-
+        if self.model == "mlptrigonometric":
+            self.Mlp_Trigonometric = Mlp_Trigonometric(self.hidden_size)
+        elif self.model == 'kantrigonometric':
+            self.KAN_Trigonometric = KAN_Trigonometric(self.hidden_size)
+        else:
+            pass
     def forward(self,
                 mol_graph: BatchMolGraph,
                 atom_descriptors_batch: List[np.ndarray] = None,
@@ -198,8 +231,12 @@ class MPNEncoder(nn.Module):
                 a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
                 rev_message = message[b2revb]  # num_bonds x hidden
                 message = a_message[b2a] - rev_message  # num_bonds x hidden
-                message = self.Mlp_Trigonometric(message, message_attention_original)  # num_bonds x hidden
-
+                if self.model == "mlptrigonometric":
+                    message = self.Mlp_Trigonometric(message, message_attention_original)  # num_bonds x hidden
+                elif self.model == "kantrigonometric":
+                    message = self.KAN_Trigonometric(message, message_attention_original)  # num_bonds x hidden
+                else:
+                    pass
             message = self.W_h(message)
             message = self.act_func(input + message)  # num_bonds x hidden_size
             message = self.dropout(message)  # num_bonds x hidden
