@@ -1,14 +1,37 @@
 [//]: # (![ChemProp Logo]&#40;docs/source/_static/images/chemprop_logo.svg&#41;)
 # thermo_GNN
-
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/chemprop)](https://badge.fury.io/py/chemprop)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/downloads/)
 [![PyPI version](https://badge.fury.io/py/chemprop.svg)](https://badge.fury.io/py/chemprop)
+[![Downloads](https://pepy.tech/badge/your-package-name)](https://github.com/chimie-paristech-CTM/thermo_GNN)
 
 This is the repository corresponding to Graph-based deep learning models for
 thermodynamic property prediction: The
 interplay between target definition, data
 distribution, featurization, and model
 architecture
+## Table of Contents
+
+- [Features](#Features)
+- [Requirements](#Requirements)
+- [Installation](#installation)
+- [Updates](#Updates)
+- [Quick Start](#quick-start)
+  - [Folder Structure](#Folder-Structure)
+  - [Train](#Train)
+- [Script](#Script)
+- [Dataset](#Dataset)
+- [Citation](#Citation)
+- [Acknowledgement](#Acknowledgement)
+
+
+## Features
+
+- **Atom fingerprint**:
+- **Mol-feature**:
+- **Ringcount feature**:
+- **Mlp_Trigonometric**:
+- **KAN_Trigonometric**:
 ## Requirements
 To use CPUs, Suitable for x86 and ARM platforms. 
 To use GPUs, you will need:
@@ -30,7 +53,7 @@ To install the TS-tools package, activate the ts-tools environment and run the f
 conda activate thermo_GNN
 pip install -e .
 ```
-## Updates.
+## Updates
 - &#9745;  add Atom fingerprint.
 - &#9745;  add Mol-feature.
 - &#9745;  add Ringcount feature.
@@ -38,8 +61,8 @@ pip install -e .
 - &#9745;  add KAN_Trigonometric.
 
 
-## How to train multidata model with mlptrigonometric and kantrigonometric
-Folder Structure:
+## Quick Start
+### Folder Structure
 ```
 .
 ├── README.md
@@ -62,7 +85,7 @@ data:
 └── 
 ```
 
-## Train  
+### Train
 To train a model, run:
 
 ```
@@ -77,7 +100,7 @@ where:
 
 For example:
 ```
-python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2  --input_features_type molecule_level_feature --aggregation norm --model dpmnn
+python train.py --data_path ./dataset/singledata/lipo_train.csv  --dataset_type regression  --output_fingerprint atom  --save_dir ./lipo/checkpoint --epochs 2  --input_features_type molecule_level_feature --aggregation norm 
 ```
 
 A full list of available command-line arguments can be found in [chemprop/args.py](https://github.com/xxxx).
@@ -114,4 +137,4 @@ Furthermore, since the work based on chemprop, also consider citing the paper in
 ```
 ## Acknowledgement
 
-- PyTorch implementation of chemprop: [https://github.com/xxxxx](https://github.com/xxxx)
+- PyTorch implementation of chemprop: [https://github.com/chemprop/chemprop](https://github.com/chemprop/chemprop)
