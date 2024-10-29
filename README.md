@@ -113,9 +113,9 @@ Notes:
 * `--quiet` can be added to reduce the amount of debugging information printed to the console. Both a quiet and verbose version of the logs are saved in the `save_dir`.
 
 ## Script
-the script 'run_chemprop' will run chemprop to train every model in directry automatily.
+the folder 'dataset_preparation' contains all script to process the original datasets.
 ## Dataset
-the dataset.zip contain the qm9 enthalpy and paton atomization enrgy dataset.
+This link [datasets](https://doi.org/10.6084/m9.figshare.27262947) contains qm9, paton, qmugs, pc9, and qmugs1.1 datasets.
 ## Citation
 If (parts of) this work are used as part of a publication, please cite the paper:
 ```
