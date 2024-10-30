@@ -1,4 +1,4 @@
-name: chemprop
+name: thermo_GNN
 
 channels:
   - pytorch

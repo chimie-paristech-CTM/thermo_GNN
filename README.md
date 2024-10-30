@@ -5,11 +5,7 @@
 [![PyPI version](https://badge.fury.io/py/chemprop.svg)](https://badge.fury.io/py/chemprop)
 [![Downloads](https://pepy.tech/badge/your-package-name)](https://github.com/chimie-paristech-CTM/thermo_GNN)
 
-This is the repository corresponding to Graph-based deep learning models for
-thermodynamic property prediction: The
-interplay between target definition, data
-distribution, featurization, and model
-architecture
+This is the repository containing the code associated with the paper "Graph-based deep learning models for thermodynamic property prediction: The interplay between target definition, data distribution, featurization, and model architecture". Code is provided "as-is". Minor edits may be required to tailor the scripts for different computational systems. 
 ## Table of Contents
 
 - [Features](#Features)
@@ -30,8 +26,11 @@ architecture
 - **Atom fingerprint**:
 - **Mol-feature**:
 - **Ringcount feature**:
-- **Mlp_Trigonometric**:
+- **MLP_Trigonometric**:
 - **KAN_Trigonometric**:
+
+More information on the meaning of the individual features, we refer to the associated manuscript.
+
 ## Requirements
 To use CPUs, Suitable for x86 and ARM platforms. 
 To use GPUs, you will need:
@@ -44,11 +43,11 @@ To download the code
 git clone https://github.com/chimie-paristech-CTM/xxxx
 cd thermo_GNN
 ```
-To set up the ts-tools conda environment:
+To set up the thermo_GNN conda environment:
 ```
 conda env create -f environment.yml
 ```
-To install the TS-tools package, activate the ts-tools environment and run the following command within the TS-tools directory:
+To install the thermo_GNN package, activate the thermo_GNN environment and run the following command within the thermo_GNN directory:
 ```
 conda activate thermo_GNN
 pip install -e .
@@ -93,10 +92,10 @@ python train.py --data_path <path> --dataset_type <type> --save_dir <dir>  --epo
 ```
 where:
 1. `<path>` is the csv file path not the dir path.
-2. `<aggregation>` containing [sum, mean, norm] controling the output type of output_head.
+2. `<aggregation>` containing [sum, mean, norm] controlling the output type of output_head.
 3. `<input_features_type>` containing [chemprop, jpca, molecule_level_feature] controling the type of input feature.
-4. `<output_fingerprint>` containing [atom, mol] controling the type of output fingerprint.
-5. `<model>` containing [dpmnn, kantrigonometric, mlptrigonometric] controling the type of output fingerprint.
+4. `<output_fingerprint>` containing [atom, mol] controlling the type of output fingerprint.
+5. `<model>` containing [dpmnn, kantrigonometric, mlptrigonometric] controlling the type of output fingerprint.
 
 For example:
 ```
@@ -113,7 +112,7 @@ Notes:
 * `--quiet` can be added to reduce the amount of debugging information printed to the console. Both a quiet and verbose version of the logs are saved in the `save_dir`.
 
 ## Script
-the folder 'dataset_preparation' contains all script to process the original datasets.
+the folder 'dataset_preparation' contains all scripts to process the original datasets.
 ## Dataset
 This link [datasets](https://doi.org/10.6084/m9.figshare.27262947) contains qm9, paton, qmugs, pc9, and qmugs1.1 datasets.
 ## Citation
@@ -126,7 +125,7 @@ If (parts of) this work are used as part of a publication, please cite the paper
   year={2024}
 }
 ```
-Furthermore, since the work based on chemprop, also consider citing the paper in which this code was originally presented:
+Furthermore, since the work is based on chemprop, please also cite the paper in which this code was originally presented:
 ```
 @article{***,
   title={Chemprop: A Machine Learning Package for Chemical Property Prediction},
