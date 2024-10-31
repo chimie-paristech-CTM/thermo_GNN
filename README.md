@@ -23,7 +23,7 @@ This is the repository containing the code associated with the paper "Graph-base
 
 ## Features
 
-- **Atom fingerprint**:
+- **Atom-fingerprint**:
 - **Mol-feature**:
 - **Ringcount feature**:
 - **MLP_Trigonometric**:
