@@ -25,7 +25,9 @@ from chemprop.nn_utils import param_count, param_count_all
 from chemprop.utils import build_optimizer, build_lr_scheduler, load_checkpoint, makedirs, \
     save_checkpoint, save_smiles_splits, load_frzn_model, multitask_mean
 
-
+def set_seed(seed=42):
+    torch.use_deterministic_algorithms(True)
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 def run_training(args: TrainArgs,
                  data: MoleculeDataset,
                  logger: Logger = None) -> Dict[str, List[float]]:
@@ -46,7 +48,7 @@ def run_training(args: TrainArgs,
 
     # Set pytorch seed for random initial weights
     torch.manual_seed(args.pytorch_seed)
-
+    set_seed(args.pytorch_seed)
     # Split data
     debug(f'Splitting data with seed {args.seed}')
     if args.separate_test_path:

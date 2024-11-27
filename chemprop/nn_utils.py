@@ -106,10 +106,14 @@ def initialize_weights(model: nn.Module) -> None:
 
     :param model: An PyTorch model.
     """
-    for param in model.parameters():
-        if param.dim() == 1:
+    for name, param in model.named_parameters():
+        if "fc_x" in name and "bias" in name:
             nn.init.constant_(param, 0)
-        else:
+        elif "fc_m" in name and "bias" in name:
+            nn.init.constant_(param, 0)
+        elif "out" in name and "bias" in name:
+            nn.init.constant_(param, 0)
+        elif param.dim() > 1:
             nn.init.xavier_normal_(param)
 
 
