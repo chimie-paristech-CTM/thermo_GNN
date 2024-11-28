@@ -113,6 +113,8 @@ def initialize_weights(model: nn.Module) -> None:
             nn.init.constant_(param, 0)
         elif "out" in name and "bias" in name:
             nn.init.constant_(param, 0)
+        elif param.dim() == 1:
+            nn.init.constant_(param, 0)
         elif param.dim() > 1:
             nn.init.xavier_normal_(param)
 

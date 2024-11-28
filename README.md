@@ -40,7 +40,7 @@ To use GPUs, you will need:
 ## Installation
 To download the code
 ```
-git clone https://github.com/chimie-paristech-CTM/xxxx
+git clone https://github.com/chimie-paristech-CTM/tree/main
 cd thermo_GNN
 ```
 To set up the thermo_GNN conda environment:
