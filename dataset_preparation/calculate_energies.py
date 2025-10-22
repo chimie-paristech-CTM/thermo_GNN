@@ -11,7 +11,7 @@ from collections import defaultdict
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-hatree2kcal = 627.509
+hatree2kcal = 627.5094740631
 class MoleculeProcessor:
     def __init__(self, accuracy_level, read_method):
         self.accuracy_level = accuracy_level
