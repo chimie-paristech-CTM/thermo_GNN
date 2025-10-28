@@ -1,34 +1,32 @@
-Chemprop
-========
+.. Chemprop documentation master file, created by
+   sphinx-quickstart on Wed Aug 23 22:52:52 2023.
+   You can adapt this file completely to your liking, but it should at least
+   contain the root `toctree` directive.
 
-.. warning:: This documentation site is several versions behind the codebase. An up-to-date version of our Read the Docs is forthcoming with the release of Chemprop v2.0 in early 2024. The `README <https://github.com/chemprop/chemprop/blob/master/README.md>`_ and `args.py <https://github.com/chemprop/chemprop/blob/master/chemprop/args.py>`_ files are currently the best sources for documentation on more recently-added features.
+Welcome to Chemprop's documentation!
+====================================
 
-`Chemprop <https://github.com/chemprop/chemprop>`_ is a message passing neural network for molecular property prediction.
+This website contains documentation for Chemprop, a PyTorch-based framework for training and evaluating message-passing neural networks (MPNNs) for molecular property prediction. The package was originally developed for :footcite:t:`chemprop_theory` and further described in :footcite:t:`chemprop_software`.
 
-At its core, Chemprop contains a directed message passing neural network (D-MPNN), which was first presented in `Analyzing Learned Molecular Representations for Property Prediction <https://pubs.acs.org/doi/abs/10.1021/acs.jcim.9b00237>`_. The Chemprop D-MPNN shows strong molecular property prediction capabilities across a range of properties, from quantum mechanical energy to human toxicity.
+To get started with Chemprop, check out the :ref:`quickstart` page, and for more detailed information, see the :ref:`installation`, :ref:`tutorial`, and :ref:`notebooks` pages.
 
-Chemprop was later used in the paper `A Deep Learning Approach to Antibiotic Discovery <https://www.cell.com/cell/fulltext/S0092-8674(20)30102-1>`_ to discover promising new antibiotics by predicting the likelihood that a molecule would inhibit the growth of *E. coli*.
+.. note::
+    Chemprop recently underwent a ground-up rewrite and new major release (v2.0.0). A helpful transition guide from Chemprop v1 to v2 can be found `here <https://docs.google.com/spreadsheets/u/3/d/e/2PACX-1vRshySIknVBBsTs5P18jL4WeqisxDAnDE5VRnzxqYEhYrMe4GLS17w5KeKPw9sged6TmmPZ4eEZSTIy/pubhtml>`_. This includes a side-by-side comparison of CLI argument options, a list of which arguments will be implemented in later versions of v2, and a list of changes to default hyperparameters.
+
+If you use Chemprop to train or develop a model in your own work, we would appreciate if you cite the following papers:
+
+.. footbibliography::
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+    :maxdepth: 1
+    :caption: Contents:
 
-   requirements
-   installation
-   tutorial
-   web
-   data
-   features
-   models
-   train
-   hyperopt
-   interpret
-   args
-   nn_utils
-   utils
-   sklearn
-   scripts
-
+    quickstart
+    installation
+    tutorial/cli/index
+    tutorial/python/index
+    notebooks
+    cmd
 
 Indices and tables
 ==================

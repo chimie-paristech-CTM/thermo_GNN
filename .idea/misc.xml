@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="chem" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="chem" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="automlip" project-jdk-type="Python SDK" />
 </project>
